@@ -2,183 +2,99 @@
   "periodo": "2026-08",
   "periodo_texto": "01 a 31 de Agosto de 2026",
   "total": {
-    "total": 141,
-    "resolvidos": 121,
-    "taxa_resolucao": 85.8,
-    "tmr_h": 37.4,
-    "solicitacoes": 105,
-    "incidentes": 36
+    "total": 12,
+    "resolvidos": 9,
+    "taxa_resolucao": 75.0,
+    "tmr_h": 31.2,
+    "solicitacoes": 6,
+    "incidentes": 6
   },
   "sustentacao": {
-    "total": 129,
-    "resolvidos": 120,
-    "taxa_resolucao": 93.0,
-    "tmr_h": 34.6,
-    "solicitacoes": 98,
-    "incidentes": 31
+    "total": 9,
+    "resolvidos": 7,
+    "taxa_resolucao": 77.8,
+    "tmr_h": 21.2,
+    "solicitacoes": 3,
+    "incidentes": 6
   },
   "projetos": {
-    "total": 12,
-    "resolvidos": 1,
-    "taxa_resolucao": 8.3,
-    "tmr_h": 380.7,
-    "solicitacoes": 7,
-    "incidentes": 5
+    "total": 3,
+    "resolvidos": 2,
+    "taxa_resolucao": 66.7,
+    "tmr_h": 66.2,
+    "solicitacoes": 3,
+    "incidentes": 0
   },
   "capacidade": {
     "sustentacao": {
       "hmm": 960.0,
       "he": 872.0,
-      "hpc": 4150.7,
-      "hha": 518.8,
-      "aderencia_pct": 59.5
+      "hpc": 148.8,
+      "hha": 18.6,
+      "aderencia_pct": 2.1
     },
     "projetos": {
       "hmm": 960.0,
       "he": 872.0,
-      "hpc": 380.7,
-      "hha": 47.6,
-      "aderencia_pct": 5.5
+      "hpc": 132.5,
+      "hha": 16.6,
+      "aderencia_pct": 1.9
     }
   },
-  "aderencia_pct": 59.5,
+  "aderencia_pct": 2.1,
   "outliers": {
-    "quantidade": 1,
-    "maior_tempo_h": 667.9
+    "quantidade": 0,
+    "maior_tempo_h": null
   },
   "recorrencias": {
     "nome": "Censo/Pool de Pacientes (AGHU)",
-    "quantidade": 12
+    "quantidade": 6
   },
   "categorias": {
     "sustentacao": [
       {
         "categoria": "AGHU-X",
-        "qtd": 41,
-        "tempo_h": 844.5,
-        "pct_qtd": 31.8,
-        "pct_tempo": 20.3
+        "qtd": 6,
+        "tempo_h": 34.2,
+        "pct_qtd": 66.7,
+        "pct_tempo": 23.0
       },
       {
         "categoria": "Intranet",
-        "qtd": 38,
-        "tempo_h": 1126.7,
-        "pct_qtd": 29.5,
-        "pct_tempo": 27.1
-      },
-      {
-        "categoria": "site Institucional",
-        "qtd": 15,
-        "tempo_h": 324.5,
-        "pct_qtd": 11.6,
-        "pct_tempo": 7.8
-      },
-      {
-        "categoria": "Processo Seletivo",
-        "qtd": 8,
-        "tempo_h": 45.7,
-        "pct_qtd": 6.2,
-        "pct_tempo": 1.1
-      },
-      {
-        "categoria": "AGHU 6",
-        "qtd": 7,
-        "tempo_h": 91.6,
-        "pct_qtd": 5.4,
-        "pct_tempo": 2.2
-      },
-      {
-        "categoria": "SCNES",
-        "qtd": 5,
-        "tempo_h": 34.3,
-        "pct_qtd": 3.9,
-        "pct_tempo": 0.8
-      },
-      {
-        "categoria": "LIS x AGHU",
-        "qtd": 3,
-        "tempo_h": 152.7,
-        "pct_qtd": 2.3,
-        "pct_tempo": 3.7
-      },
-      {
-        "categoria": "ChatBot",
         "qtd": 2,
-        "tempo_h": 596.6,
-        "pct_qtd": 1.6,
-        "pct_tempo": 14.4
+        "tempo_h": 46.5,
+        "pct_qtd": 22.2,
+        "pct_tempo": 31.3
       },
       {
-        "categoria": "Etiquetas",
-        "qtd": 2,
-        "tempo_h": 667.9,
-        "pct_qtd": 1.6,
-        "pct_tempo": 16.1
-      },
-      {
-        "categoria": "Mapa de Dietas",
-        "qtd": 2,
-        "tempo_h": 72.8,
-        "pct_qtd": 1.6,
-        "pct_tempo": 1.8
+        "categoria": "Relatórios",
+        "qtd": 1,
+        "tempo_h": 68.0,
+        "pct_qtd": 11.1,
+        "pct_tempo": 45.7
       }
     ],
     "projetos": [
       {
-        "categoria": "AGHU-X",
-        "qtd": 5,
-        "tempo_h": 0.0,
-        "pct_qtd": 41.7,
-        "pct_tempo": 0.0
-      },
-      {
-        "categoria": "APAC",
-        "qtd": 1,
-        "tempo_h": 0.0,
-        "pct_qtd": 8.3,
-        "pct_tempo": 0.0
-      },
-      {
         "categoria": "API-EXAMES",
         "qtd": 1,
         "tempo_h": 0.0,
-        "pct_qtd": 8.3,
-        "pct_tempo": 0.0
-      },
-      {
-        "categoria": "Central de Relatórios",
-        "qtd": 1,
-        "tempo_h": 0.0,
-        "pct_qtd": 8.3,
+        "pct_qtd": 33.3,
         "pct_tempo": 0.0
       },
       {
         "categoria": "IBC",
         "qtd": 1,
-        "tempo_h": 380.7,
-        "pct_qtd": 8.3,
-        "pct_tempo": 100.0
-      },
-      {
-        "categoria": "Planka",
-        "qtd": 1,
-        "tempo_h": 0.0,
-        "pct_qtd": 8.3,
-        "pct_tempo": 0.0
+        "tempo_h": 54.5,
+        "pct_qtd": 33.3,
+        "pct_tempo": 41.1
       },
       {
         "categoria": "RMG Dashboard",
         "qtd": 1,
-        "tempo_h": 0.0,
-        "pct_qtd": 8.3,
-        "pct_tempo": 0.0
-      },
-      {
-        "categoria": "SCNES",
-        "qtd": 1,
-        "tempo_h": 0.0,
-        "pct_qtd": 8.3,
-        "pct_tempo": 0.0
+        "tempo_h": 78.0,
+        "pct_qtd": 33.3,
+        "pct_tempo": 58.9
       }
     ]
   }

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gerador GLPI</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+<main class="shell narrow">
+  <header><p class="eyebrow">GLPI · relatório mensal</p><h1>Revisar dados antes de gerar</h1><p class="muted">Envie um CSV ou Excel. O sistema normaliza os dados, permite correções e só então cria o relatório.</p></header>
+  {% with messages = get_flashed_messages(with_categories=true) %}{% for categoria, mensagem in messages %}<div class="alert {{ categoria }}">{{ mensagem }}</div>{% endfor %}{% endwith %}
+  <form class="upload" method="post" enctype="multipart/form-data">
+    <label for="arquivo">Arquivo exportado do GLPI</label>
+    <input id="arquivo" name="arquivo" type="file" accept=".csv,.xlsx,.xlsm" required>
+    <button type="submit">Carregar e revisar</button>
+  </form>
+  <p class="hint">Formatos aceitos: CSV, XLSX e XLSM. O arquivo não é mantido após a leitura.</p>
+</main>
+</body>
+</html>

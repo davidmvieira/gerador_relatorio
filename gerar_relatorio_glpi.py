@@ -120,7 +120,7 @@ CONFIG = {
     "outlier_iqr_mult": 8.0,
 
     # pasta e nome de saída
-    "pasta_saida": "saida_relatorio",
+    "pasta_saida": os.path.join("relatorios_glpi", "execucoes"),
     "nome_docx": "Relatorio_Sistemas.docx",
     "pasta_historico": os.path.join("relatorios_glpi", "historico"),
 }
@@ -294,8 +294,8 @@ def consolidar_categorias(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def preparar_dataframe(caminho_xlsx: str) -> pd.DataFrame:
-    m = carregar_dados(caminho_xlsx)
+def preparar_dataframe_df(m: pd.DataFrame) -> pd.DataFrame:
+    m = m.copy()
     m = consolidar_categorias(m)
 
     status_map = {1: "Novo", 2: "Processando", 3: "Pendente", 4: "Planejado", 5: "Solucionado", 6: "Fechado"}
@@ -320,6 +320,10 @@ def preparar_dataframe(caminho_xlsx: str) -> pd.DataFrame:
     m["concluido"] = concluido
 
     return m
+
+
+def preparar_dataframe(caminho_entrada: str) -> pd.DataFrame:
+    return preparar_dataframe_df(carregar_dados(caminho_entrada))
 
 
 def _numero(valor, casas=None):
@@ -614,6 +618,16 @@ def tabela_frente_secundaria(m: pd.DataFrame, frente: str) -> pd.DataFrame:
 
 def _preparar_pasta_saida(caminho_saida):
     os.makedirs(caminho_saida, exist_ok=True)
+
+
+def _nova_pasta_execucao():
+    base = datetime.now().strftime("%Y%m%d_%H%M%S")
+    caminho = os.path.join(CONFIG["pasta_saida"], base)
+    contador = 1
+    while os.path.exists(caminho):
+        caminho = os.path.join(CONFIG["pasta_saida"], f"{base}_{contador:02d}")
+        contador += 1
+    return caminho
 
 
 def grafico_donut_natureza(painel: dict, caminho: str):
@@ -1113,13 +1127,11 @@ def montar_documento(dados: dict, caminho_saida: str):
 # 5. ORQUESTRAÇÃO
 # ============================================================================
 
-def gerar_relatorio(caminho_xlsx: str):
-    timestamp_execucao = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
-    pasta = os.path.join(CONFIG["pasta_saida"], timestamp_execucao)
+def gerar_relatorio_dataframe(m: pd.DataFrame):
+    pasta = _nova_pasta_execucao()
     _preparar_pasta_saida(pasta)
 
-    print(f"[1/5] Lendo e limpando dados de {caminho_xlsx} ...")
-    m = preparar_dataframe(caminho_xlsx)
+    print("[1/5] Usando dados revisados e normalizados ...")
     periodo_texto, ano, mes, ultimo_dia = periodo_do_relatorio(m)
     bucket_series, bucket_labels = buckets_semanais(m, ano, mes, ultimo_dia)
 
@@ -1207,6 +1219,10 @@ def gerar_relatorio(caminho_xlsx: str):
 
     print(f"[5/5] Concluído! Relatório salvo em: {caminho_docx}")
     return caminho_docx
+
+
+def gerar_relatorio(caminho_entrada: str):
+    return gerar_relatorio_dataframe(preparar_dataframe(caminho_entrada))
 
 
 if __name__ == "__main__":

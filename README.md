@@ -17,7 +17,7 @@ o relatório `.docx` completo, já com:
 ## Instalação
 
 ```bash
-pip install pandas openpyxl matplotlib python-docx --break-system-packages
+pip install -r requirements.txt --break-system-packages
 ```
 
 (remova `--break-system-packages` se estiver usando um virtualenv)
@@ -33,14 +33,33 @@ python3 gerar_relatorio_glpi.py caminho/para/base_de_dados.csv
 Se você não passar nenhum argumento, ele procura por `base_de_dados.xlsx` na
 pasta atual.
 
-O resultado fica em uma pasta própria dentro de `./saida_relatorio/`, nomeada
-com o timestamp da execução, por exemplo:
-`saida_relatorio/2026-09-16_21-55-03_123456/`.
+Para usar a interface web:
+
+```bash
+python -m pip install -r requirements.txt
+python app.py
+```
+
+Abra `http://127.0.0.1:5000`, envie o CSV/Excel, revise os dados, salve as
+alterações e confirme a geração. As execuções ficam em
+`relatorios_glpi/execucoes/YYYYMMDD_HHMMSS/`.
+
+O resultado fica em uma pasta própria dentro de
+`./relatorios_glpi/execucoes/`, nomeada com o timestamp da execução, por
+exemplo: `relatorios_glpi/execucoes/2026-09-16_21-55-03_123456/`.
 
 - `Relatorio_Sistemas.docx` — o relatório final
 - `01_donut_natureza.png`, `02_...png` etc. — os gráficos gerados (também já
   embutidos no `.docx`, ficam na pasta da execução caso você queira reusar em
   outro lugar)
+
+A estrutura principal fica assim:
+
+```text
+relatorios_glpi/
+├── historico/   # métricas mensais consolidadas
+└── execucoes/   # DOCX e gráficos de cada geração
+```
 
 As métricas consolidadas de cada mês ficam em
 `./relatorios_glpi/historico/YYYY-MM.json`. Esses arquivos não armazenam

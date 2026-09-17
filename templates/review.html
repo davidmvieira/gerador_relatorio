@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Revisão · Gerador GLPI</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+<main class="shell wide">
+  <header class="topbar"><div><p class="eyebrow">GLPI · revisão</p><h1>Prévia editável</h1><p class="muted">Os dados abaixo já passaram pela leitura e normalização usadas no relatório.</p></div><a class="link" href="{{ url_for('index') }}">Nova carga</a></header>
+  {% with messages = get_flashed_messages(with_categories=true) %}{% for categoria, mensagem in messages %}<div class="alert {{ categoria }}">{{ mensagem }}</div>{% endfor %}{% endwith %}
+  <section class="metrics">
+    <div><span>Total</span><strong>{{ indicadores.total }}</strong></div><div><span>Resolvidos</span><strong>{{ indicadores.resolvidos }}</strong></div><div><span>Taxa</span><strong>{{ indicadores.taxa }}%</strong></div><div><span>TMR</span><strong>{{ indicadores.tmr if indicadores.tmr is not none else '—' }}{% if indicadores.tmr is not none %} h{% endif %}</strong></div><div><span>Sustentação</span><strong>{{ indicadores.sustentacao }}</strong></div><div><span>Projetos</span><strong>{{ indicadores.projetos }}</strong></div>
+  </section>
+  {% if erros %}<div class="validation error"><b>Erros impeditivos</b><ul>{% for item in erros %}<li>{{ item }}</li>{% endfor %}</ul></div>{% endif %}
+  {% if avisos %}<div class="validation warning"><b>Avisos</b><ul>{% for item in avisos %}<li>{{ item }}</li>{% endfor %}</ul></div>{% endif %}
+  <form method="post" action="{{ url_for('salvar_revisao', id_sessao=sessao) }}">
+    <input type="hidden" name="pagina" value="{{ pagina }}">
+    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Título</th><th>Categoria</th><th>Entidade</th><th>Status</th><th>Prioridade</th><th>Tipo</th><th>Grupo/técnico</th><th>Observações</th><th>Abertura</th><th>Solução</th></tr></thead><tbody>
+    {% for r in registros %}<tr>
+      <td class="fixed">{{ r.id }}</td><td class="title">{{ r.name }}</td>
+      <td><input name="categoria_{{ r.indice }}" value="{{ r.categoria }}"></td>
+      <td><input name="entidade_{{ r.indice }}" value="{{ r.entidade }}"></td>
+      <td><select name="status_{{ r.indice }}">{% for codigo,nome in status.items() %}<option value="{{ codigo }}" {% if r.status == codigo %}selected{% endif %}>{{ nome }}</option>{% endfor %}</select></td>
+      <td><select name="priority_{{ r.indice }}">{% for codigo,nome in prioridades.items() %}<option value="{{ codigo }}" {% if r.priority == codigo %}selected{% endif %}>{{ nome }}</option>{% endfor %}</select></td>
+      <td><select name="type_{{ r.indice }}">{% for codigo,nome in tipos.items() %}<option value="{{ codigo }}" {% if r.type == codigo %}selected{% endif %}>{{ nome }}</option>{% endfor %}</select></td>
+      <td><input name="grupo_tecnico_{{ r.indice }}" value="{{ r.grupo_tecnico }}"></td>
+      <td><input name="observacoes_{{ r.indice }}" value="{{ r.observacoes }}"></td>
+      <td><input type="datetime-local" name="data_abertura_{{ r.indice }}" value="{{ r.data_abertura }}"></td>
+      <td><input type="datetime-local" name="data_solucao_{{ r.indice }}" value="{{ r.data_solucao }}"></td>
+    </tr>{% endfor %}
+    </tbody></table></div>
+    <div class="actions"><button type="submit">Salvar alterações</button></div>
+  </form>
+  <nav class="pagination">{% if pagina > 1 %}<a href="{{ url_for('revisao', id_sessao=sessao, pagina=pagina-1) }}">Anterior</a>{% endif %}<span>Página {{ pagina }} de {{ total_paginas }} · {{ total }} registros</span>{% if pagina < total_paginas %}<a href="{{ url_for('revisao', id_sessao=sessao, pagina=pagina+1) }}">Próxima</a>{% endif %}</nav>
+  <section class="confirm"><h2>Confirmação</h2><p>Período: <b>{{ registros[0].data_abertura[:7] if registros else '—' }}</b> · Registros: <b>{{ total }}</b></p><form method="post" action="{{ url_for('gerar', id_sessao=sessao) }}"><button {% if erros %}disabled title="Corrija os erros antes de gerar"{% endif %}>Gerar relatório</button></form></section>
+</main>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Resultado · Gerador GLPI</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+<main class="shell narrow">
+  <p class="eyebrow">GLPI · concluído</p><h1>Relatório gerado com sucesso</h1>
+  <div class="success">✓ Execução {{ resultado.execucao }}</div>
+  <dl class="summary"><dt>Período</dt><dd>{{ resultado.periodo.texto }}</dd><dt>Pasta da execução</dt><dd>{{ resultado.execucao }}</dd></dl>
+  <a class="primary" href="{{ url_for('arquivo_resultado', id_sessao=sessao, nome='Relatorio_Sistemas.docx') }}">Baixar relatório DOCX</a>
+  <h2>Arquivos gerados</h2><ul class="files">{% for arquivo in arquivos %}<li><a href="{{ url_for('arquivo_resultado', id_sessao=sessao, nome=arquivo) }}">{{ arquivo }}</a></li>{% endfor %}</ul>
+  <a class="link" href="{{ url_for('index') }}">Iniciar nova geração</a>
+</main>
+</body>
+</html>
