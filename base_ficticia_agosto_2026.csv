@@ -1,0 +1,13 @@
+id_chamado,titulo,entities_id,entidade,categoria,tipo_chamado,prioridade,status_atual,data_abertura,data_solucao,data_fechamento,tempo_resolucao_horas
+99001,"Erro de leito no AGHU - Ana Souza - 1001 -",14,Sistemas,AGHU-X,Incidente,Alta,Solucionado,2026-08-03 08:10:00,2026-08-03 12:40:00,2026-08-03 12:45:00,4.5
+99002,"Solicitar acesso ao painel - Bruno Lima - 1002 -",14,Sistemas,Intranet,Requisição,Média,Fechado,2026-08-04 09:00:00,2026-08-05 10:30:00,2026-08-05 10:40:00,25.5
+99003,"Censo fora do ar no AGHU - Carla Reis - 1003 -",14,Sistemas,AGHU-X,Incidente,Muito Alta,Solucionado,2026-08-05 10:15:00,2026-08-05 18:15:00,2026-08-05 18:20:00,8.0
+99004,"Ajuste de relatório institucional - Diego Alves - 1004 -",14,Sistemas,Relatórios,Requisição,Baixa,Fechado,2026-08-07 13:20:00,2026-08-10 09:20:00,2026-08-10 09:30:00,68.0
+99005,"Erro de leito após alta - Elisa Moura - 1005 -",14,Sistemas,AGHU-X,Incidente,Crítica,Solucionado,2026-08-11 07:45:00,2026-08-11 11:00:00,2026-08-11 11:05:00,3.25
+99006,"Criar usuário para projeto IBC - Fabio Costa - 1006 -",22,Projetos,IBC,Requisição,Média,Solucionado,2026-08-12 09:30:00,2026-08-14 16:00:00,2026-08-14 16:10:00,54.5
+99007,"Censo com divergência de pacientes - Gabriela Luz - 1007 -",14,Sistemas,AGHU-X,Incidente,Alta,Processando,2026-08-13 08:00:00,,,0
+99008,"Integração API de exames - Hugo Dias - 1008 -",22,Projetos,API-EXAMES,Requisição,Alta,Processando,2026-08-15 14:10:00,,,0
+99009,"Atualizar categoria do chamado - Iris Melo - 1009 -",14,Sistemas,Intranet,Requisição,Muito Baixa,Fechado,2026-08-18 11:00:00,2026-08-19 08:00:00,2026-08-19 08:10:00,21.0
+99010,"Erro no pool de pacientes - Joao Silva - 1010 -",14,Sistemas,AGHU-X,Incidente,Muito Alta,Solucionado,2026-08-20 15:30:00,2026-08-21 10:00:00,2026-08-21 10:10:00,18.5
+99011,"Dashboard de projetos - Karen Dias - 1011 -",22,Projetos,RMG Dashboard,Requisição,Baixa,Fechado,2026-08-22 08:30:00,2026-08-25 14:30:00,2026-08-25 14:40:00,78.0
+99012,"Censo indisponível na unidade - Lucas Mora - 1012 -",14,Sistemas,AGHU-X,Incidente,Alta,Novo,2026-08-26 10:00:00,,,0

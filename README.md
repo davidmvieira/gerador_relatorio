@@ -11,6 +11,7 @@ o relatório `.docx` completo, já com:
 - Capacidade da equipe / aderência (HMM, HE, HPC, HHA, AD%)
 - Detecção de um padrão recorrente por palavra-chave no título (ex.: um bug
   que aparece repetidas vezes) com gráfico de volume semanal
+- Histórico mensal incremental com comparação, tendência e projeção estatística
 - Todos os gráficos (matplotlib) embutidos no próprio .docx
 
 ## Instalação
@@ -25,20 +26,36 @@ pip install pandas openpyxl matplotlib python-docx --break-system-packages
 
 ```bash
 python3 gerar_relatorio_glpi.py caminho/para/base_de_dados.xlsx
+# ou
+python3 gerar_relatorio_glpi.py caminho/para/base_de_dados.csv
 ```
 
 Se você não passar nenhum argumento, ele procura por `base_de_dados.xlsx` na
 pasta atual.
 
-O resultado fica em `./saida_relatorio/`:
+O resultado fica em uma pasta própria dentro de `./saida_relatorio/`, nomeada
+com o timestamp da execução, por exemplo:
+`saida_relatorio/2026-09-16_21-55-03_123456/`.
+
 - `Relatorio_Sistemas.docx` — o relatório final
 - `01_donut_natureza.png`, `02_...png` etc. — os gráficos gerados (também já
-  embutidos no .docx, ficam aqui soltos caso você queira reusar em outro lugar)
+  embutidos no `.docx`, ficam na pasta da execução caso você queira reusar em
+  outro lugar)
+
+As métricas consolidadas de cada mês ficam em
+`./relatorios_glpi/historico/YYYY-MM.json`. Esses arquivos não armazenam
+chamados individuais. O mesmo mês é substituído quando o relatório é gerado
+novamente.
+
+Com pelo menos dois meses, o relatório mostra a comparação e os gráficos de
+evolução. Com pelo menos três meses, mostra tendência e uma estimativa do mês
+seguinte pela média móvel simples dos três últimos meses. Lacunas entre meses
+são mantidas e identificadas na comparação.
 
 ## Formato esperado do Excel
 
-O script aceita o padrão antigo de duas abas ou um arquivo com uma única aba de
-detalhes.
+O script aceita o padrão antigo de duas abas, um arquivo Excel com uma única
+aba de detalhes ou um arquivo CSV.
 
 **Aba 1** (fonte confiável de id/categoria/status/prioridade/entidade):
 `id, name, date, itilcategories_id, categoria, demanda, status, priority, type, entities_id, entidade`
@@ -49,6 +66,17 @@ detalhes.
 Quando houver apenas uma aba, ela deve conter as colunas da Aba 2 acima. O
 script converte automaticamente os nomes e os valores de status, prioridade e
 tipo de chamado para o formato interno do relatório.
+
+O CSV deve conter as mesmas colunas da Aba 2. O separador (vírgula ou ponto e
+vírgula) é detectado automaticamente, assim como as codificações UTF-8 e
+Latin-1.
+
+O arquivo [base_ficticia_agosto_2026.csv](base_ficticia_agosto_2026.csv) pode
+ser usado para validar a execução sem dados reais:
+
+```bash
+python gerar_relatorio_glpi.py base_ficticia_agosto_2026.csv
+```
 
 Se os nomes das abas no seu export forem diferentes, ajuste
 `CONFIG["aba_principal"]` e `CONFIG["aba_detalhe"]` no topo do script.
@@ -68,6 +96,7 @@ Se os nomes das abas no seu export forem diferentes, ajuste
   destacado como outlier. Quanto maior, mais exigente (só pega casos muito
   fora da curva). O padrão (8.0) foi calibrado para isolar só casos realmente
   extremos, não qualquer chamado acima da média.
+- `pasta_historico`: diretório dos arquivos históricos mensais.
 
 ## Limitações conhecidas (e por quê)
 

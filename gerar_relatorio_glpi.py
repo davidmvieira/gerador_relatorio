@@ -4,7 +4,7 @@
 gerar_relatorio_glpi.py
 ========================
 Gera, de forma autônoma, o relatório mensal da Equipe de Sistemas a partir de
-um export do GLPI em Excel (duas abas), separando as demandas em duas frentes
+um export do GLPI em Excel (uma ou duas abas), separando as demandas em duas frentes
 (Sustentação x Projetos) e produzindo um .docx pronto para leitura da liderança.
 
 COMO USAR
@@ -13,7 +13,8 @@ COMO USAR
        pip install pandas openpyxl matplotlib python-docx --break-system-packages
 
 2. Rode o script apontando para o export do mês:
-       python3 gerar_relatorio_glpi.py caminho/para/base_de_dados.xlsx
+    python3 gerar_relatorio_glpi.py caminho/para/base_de_dados.xlsx
+    python3 gerar_relatorio_glpi.py caminho/para/base_de_dados.csv
 
    Se nenhum caminho for passado, o script procura por "base_de_dados.xlsx"
    na pasta atual.
@@ -35,7 +36,7 @@ O nome exato das abas é configurável em CONFIG['aba_principal'] / ['aba_detalh
 
 O QUE O SCRIPT FAZ
 ------------------
-1. Lê e cruza as duas abas pelo ID do chamado.
+1. Lê uma ou duas abas e cruza as duas fontes pelo ID do chamado quando necessário.
 2. Detecta e tenta corrigir automaticamente linhas com colunas deslocadas
    (comum quando o título do chamado tem um caractere especial embutido).
 3. Separa os chamados em duas frentes:
@@ -46,7 +47,10 @@ O QUE O SCRIPT FAZ
    capacidade/aderência da equipe, outliers de tempo de resolução,
    incidência de termos-chave (ex.: problemas recorrentes de um sistema)
    e a tabela detalhada da frente Projetos.
-6. Gera os gráficos (matplotlib) e monta o .docx final (python-docx).
+6. Consolida métricas mensais em `relatorios_glpi/historico/YYYY-MM.json`.
+7. Compara o mês atual com o histórico, mostra tendências e calcula projeção
+    por média móvel simples quando há dados suficientes.
+8. Gera os gráficos (matplotlib) e monta o .docx final (python-docx).
 
 Ajuste a seção CONFIG abaixo a cada mês / a cada mudança de contexto.
 """
@@ -118,6 +122,7 @@ CONFIG = {
     # pasta e nome de saída
     "pasta_saida": "saida_relatorio",
     "nome_docx": "Relatorio_Sistemas.docx",
+    "pasta_historico": os.path.join("relatorios_glpi", "historico"),
 }
 
 # Paleta de cores (hex, sem #) usada em tabelas e gráficos
@@ -143,12 +148,26 @@ COR = {
 # 1. CARGA E LIMPEZA DOS DADOS
 # ============================================================================
 
-def carregar_dados(caminho_xlsx: str) -> pd.DataFrame:
-    """Lê o Excel em uma ou duas abas e devolve um DataFrame único e limpo."""
-    abas = pd.ExcelFile(caminho_xlsx).sheet_names
+def _ler_entrada(caminho_entrada: str):
+    extensao = os.path.splitext(caminho_entrada)[1].lower()
+    if extensao == ".csv":
+        try:
+            return pd.read_csv(caminho_entrada, sep=None, engine="python", encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            return pd.read_csv(caminho_entrada, sep=None, engine="python", encoding="latin-1")
+    if extensao in (".xlsx", ".xlsm"):
+        return pd.ExcelFile(caminho_entrada)
+    raise ValueError("Formato não suportado. Use um arquivo .xlsx, .xlsm ou .csv.")
+
+
+def carregar_dados(caminho_entrada: str) -> pd.DataFrame:
+    """Lê CSV ou Excel em uma ou duas abas e devolve dados limpos."""
+    entrada = _ler_entrada(caminho_entrada)
+    eh_csv = isinstance(entrada, pd.DataFrame)
+    abas = [None] if eh_csv else entrada.sheet_names
 
     if len(abas) == 1:
-        df = pd.read_excel(caminho_xlsx, sheet_name=abas[0])
+        df = entrada if eh_csv else pd.read_excel(caminho_entrada, sheet_name=abas[0])
         df = df[df["id_chamado"].notna()].copy()
         colunas_renomeadas = {
             "id_chamado": "id",
@@ -193,8 +212,8 @@ def carregar_dados(caminho_xlsx: str) -> pd.DataFrame:
         df["data_abertura"] = df["date"]
         m = df
     else:
-        df1 = pd.read_excel(caminho_xlsx, sheet_name=CONFIG["aba_principal"])
-        df2 = pd.read_excel(caminho_xlsx, sheet_name=CONFIG["aba_detalhe"])
+        df1 = pd.read_excel(caminho_entrada, sheet_name=CONFIG["aba_principal"])
+        df2 = pd.read_excel(caminho_entrada, sheet_name=CONFIG["aba_detalhe"])
 
         # remove linha de rodapé/resumo (sem id) que alguns exports trazem no final
         df2 = df2[df2["id_chamado"].notna()].copy()
@@ -301,6 +320,160 @@ def preparar_dataframe(caminho_xlsx: str) -> pd.DataFrame:
     m["concluido"] = concluido
 
     return m
+
+
+def _numero(valor, casas=None):
+    """Converte escalares pandas/NumPy para tipos simples serializáveis."""
+    if valor is None or pd.isna(valor):
+        return None
+    resultado = float(valor)
+    return round(resultado, casas) if casas is not None else resultado
+
+
+def _metricas_historicas(periodo_texto, painel_total, painel_sust, painel_proj,
+                         cap_sust, cap_proj, cat_sust_full, cat_proj_full,
+                         outliers_sust, recorrencia):
+    def painel_resumido(painel):
+        return {
+            "total": int(painel["total"]),
+            "resolvidos": int(painel["entregues"]),
+            "taxa_resolucao": _numero(painel["taxa_resolucao"], 1),
+            "tmr_h": _numero(painel["tmr_h"], 1),
+            "solicitacoes": int(painel["req"]),
+            "incidentes": int(painel["inc"]),
+        }
+
+    def capacidade_resumida(capacidade):
+        return {
+            "hmm": _numero(capacidade["hmm"], 1),
+            "he": _numero(capacidade["he"], 1),
+            "hpc": _numero(capacidade["hpc"], 1),
+            "hha": _numero(capacidade["hha"], 1),
+            "aderencia_pct": _numero(capacidade["ad_pct"], 1),
+        }
+
+    def categorias_resumidas(categorias):
+        resultado = []
+        for categoria, linha in categorias.head(CONFIG["max_categorias_detalhadas"]).iterrows():
+            resultado.append({
+                "categoria": str(categoria),
+                "qtd": int(linha["qtd"]),
+                "tempo_h": _numero(linha["tempo_h"], 1),
+                "pct_qtd": _numero(linha["pct_qtd"], 1),
+                "pct_tempo": _numero(linha["pct_tempo"], 1),
+            })
+        return resultado
+
+    return {
+        "periodo": None,
+        "periodo_texto": periodo_texto,
+        "total": painel_resumido(painel_total),
+        "sustentacao": painel_resumido(painel_sust),
+        "projetos": painel_resumido(painel_proj),
+        "capacidade": {
+            "sustentacao": capacidade_resumida(cap_sust),
+            "projetos": capacidade_resumida(cap_proj),
+        },
+        "aderencia_pct": _numero(cap_sust["ad_pct"], 1),
+        "outliers": {
+            "quantidade": int(len(outliers_sust)),
+            "maior_tempo_h": _numero(outliers_sust["tempo_h"].max(), 1)
+            if len(outliers_sust) else None,
+        },
+        "recorrencias": {
+            "nome": CONFIG["nome_recorrencia"],
+            "quantidade": int(len(recorrencia)),
+        },
+        "categorias": {
+            "sustentacao": categorias_resumidas(cat_sust_full),
+            "projetos": categorias_resumidas(cat_proj_full),
+        },
+    }
+
+
+def carregar_historico():
+    historico = []
+    pasta = CONFIG["pasta_historico"]
+    if not os.path.isdir(pasta):
+        return historico
+    for nome in os.listdir(pasta):
+        if not re.fullmatch(r"\d{4}-\d{2}\.json", nome):
+            continue
+        caminho = os.path.join(pasta, nome)
+        try:
+            with open(caminho, "r", encoding="utf-8") as arquivo:
+                registro = json.load(arquivo)
+            registro["periodo"] = nome[:-5]
+            historico.append(registro)
+        except (OSError, json.JSONDecodeError, TypeError) as erro:
+            print(f"[aviso] Histórico ignorado ({nome}): {erro}")
+    return sorted(historico, key=lambda item: item.get("periodo", ""))
+
+
+def salvar_historico(registro):
+    pasta = CONFIG["pasta_historico"]
+    os.makedirs(pasta, exist_ok=True)
+    caminho = os.path.join(pasta, f'{registro["periodo"]}.json')
+    with open(caminho, "w", encoding="utf-8") as arquivo:
+        json.dump(registro, arquivo, ensure_ascii=False, indent=2)
+
+
+def comparar_metricas(atual, anterior):
+    comparacoes = []
+    indicadores = [
+        ("Chamados", atual["total"]["total"], anterior["total"]["total"], ""),
+        ("Resolvidos", atual["total"]["resolvidos"], anterior["total"]["resolvidos"], ""),
+        ("Taxa de resolução", atual["total"]["taxa_resolucao"], anterior["total"]["taxa_resolucao"], "%"),
+        ("TMR", atual["total"]["tmr_h"], anterior["total"]["tmr_h"], "h"),
+        ("Sustentação", atual["sustentacao"]["total"], anterior["sustentacao"]["total"], ""),
+        ("Projetos", atual["projetos"]["total"], anterior["projetos"]["total"], ""),
+        ("Aderência", atual["aderencia_pct"], anterior["aderencia_pct"], "%"),
+    ]
+    for nome, valor_atual, valor_anterior, unidade in indicadores:
+        if valor_atual is None or valor_anterior is None:
+            continue
+        diferenca = valor_atual - valor_anterior
+        variacao = diferenca / valor_anterior * 100 if valor_anterior else None
+        comparacoes.append({
+            "indicador": nome,
+            "atual": valor_atual,
+            "anterior": valor_anterior,
+            "diferenca": diferenca,
+            "variacao_pct": variacao,
+            "unidade": unidade,
+        })
+    return comparacoes
+
+
+def preparar_visao_historica(historico, atual):
+    serie = sorted(historico + [atual], key=lambda item: item["periodo"])
+    anterior = next((item for item in reversed(historico)
+                     if item["periodo"] < atual["periodo"]), None)
+    tendencia = serie if len(serie) >= 3 else []
+    projecao = {}
+    if len(serie) >= 3:
+        ultimos = serie[-3:]
+        campos = [
+            ("Chamados", ("total", "total")),
+            ("Resolvidos", ("total", "resolvidos")),
+            ("Taxa de resolução", ("total", "taxa_resolucao")),
+            ("TMR", ("total", "tmr_h")),
+            ("Sustentação", ("sustentacao", "total")),
+            ("Projetos", ("projetos", "total")),
+            ("Aderência", (None, "aderencia_pct")),
+        ]
+        for nome, (grupo, campo) in campos:
+            valores = [item[campo] if grupo is None else item[grupo][campo]
+                       for item in ultimos]
+            valores = [valor for valor in valores if valor is not None]
+            if valores:
+                projecao[nome] = sum(valores) / len(valores)
+    return {
+        "anterior": anterior,
+        "comparacoes": comparar_metricas(atual, anterior) if anterior else [],
+        "tendencia": tendencia,
+        "projecao": projecao,
+    }
 
 
 # ============================================================================
@@ -439,8 +612,8 @@ def tabela_frente_secundaria(m: pd.DataFrame, frente: str) -> pd.DataFrame:
 # 3. GRÁFICOS
 # ============================================================================
 
-def _preparar_pasta_saida():
-    os.makedirs(CONFIG["pasta_saida"], exist_ok=True)
+def _preparar_pasta_saida(caminho_saida):
+    os.makedirs(caminho_saida, exist_ok=True)
 
 
 def grafico_donut_natureza(painel: dict, caminho: str):
@@ -560,6 +733,28 @@ def grafico_pizza_horas_frente(cap_sust: dict, cap_proj: dict, caminho: str):
     plt.close()
 
 
+def grafico_evolucao_historica(serie, grupo, campo, titulo, caminho, unidade=""):
+    pontos = [(item["periodo"], item[campo] if grupo is None else item[grupo][campo])
+              for item in serie]
+    pontos = [(periodo, valor) for periodo, valor in pontos if valor is not None]
+    if not pontos:
+        return
+    periodos, valores = zip(*pontos)
+    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=150)
+    ax.plot(periodos, valores, marker="o", linewidth=2.5, color="#" + COR["navy"])
+    for periodo, valor in zip(periodos, valores):
+        ax.annotate(f"{valor:.1f}{unidade}" if isinstance(valor, float) else f"{valor}{unidade}",
+                    (periodo, valor), textcoords="offset points", xytext=(0, 9),
+                    ha="center", fontsize=9, fontweight="bold")
+    ax.set_title(titulo, fontsize=14, fontweight="bold", color="#" + COR["navy"], pad=15)
+    ax.set_ylabel(unidade.strip() or "Valor", fontsize=10, color="#555555")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    plt.savefig(caminho, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close()
+
+
 # ============================================================================
 # 4. GERAÇÃO DO .DOCX (python-docx)
 # ============================================================================
@@ -666,6 +861,34 @@ def adicionar_banner(doc, texto, cor_fundo, cor_texto):
     return p
 
 
+def _formatar_valor_historico(valor, unidade=""):
+    if valor is None:
+        return "—"
+    if isinstance(valor, float):
+        texto = f"{valor:.1f}"
+    else:
+        texto = str(valor)
+    return f"{texto}{unidade}"
+
+
+def _formatar_variacao(valor, unidade=""):
+    if valor is None:
+        return "—"
+    sinal = "+" if valor > 0 else ""
+    if isinstance(valor, float):
+        return f"{sinal}{valor:.1f}{unidade}"
+    return f"{sinal}{valor}{unidade}"
+
+
+def _descricao_periodo_anterior(periodo_atual, periodo_anterior):
+    atual = datetime.strptime(periodo_atual, "%Y-%m")
+    anterior = datetime.strptime(periodo_anterior, "%Y-%m")
+    distancia = (atual.year - anterior.year) * 12 + atual.month - anterior.month
+    if distancia == 1:
+        return f"comparação com {periodo_anterior}"
+    return f"comparação com {periodo_anterior} (lacuna de {distancia - 1} mês(es))"
+
+
 def adicionar_imagem(doc, caminho, largura_cm):
     doc.add_picture(caminho, width=Cm(largura_cm))
     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -710,6 +933,59 @@ def montar_documento(dados: dict, caminho_saida: str):
 
     F_SUST = CONFIG["nome_frente_sustentacao"]
     F_PROJ = CONFIG["nome_frente_projetos"]
+
+    # ---- Visão Histórica ----
+    visao = dados["visao_historica"]
+    atual_historico = dados["historico_atual"]
+    adicionar_titulo(doc, "Visão Histórica")
+    adicionar_paragrafo(
+        doc,
+        f'Período atual: {atual_historico["periodo"]} — '
+        f'{atual_historico["total"]["total"]} chamados, '
+        f'{atual_historico["total"]["resolvidos"]} resolvidos e '
+        f'taxa de resolução de {atual_historico["total"]["taxa_resolucao"]}%.'
+    )
+    if visao["anterior"]:
+        periodo_anterior = visao["anterior"]["periodo"]
+        adicionar_paragrafo(
+            doc,
+            _descricao_periodo_anterior(atual_historico["periodo"], periodo_anterior) + ". "
+            "Os valores não são classificados como favoráveis ou desfavoráveis.",
+            italic=True,
+        )
+        rows = []
+        unidades = {"Chamados": "", "Resolvidos": "", "Taxa de resolução": "%",
+                    "TMR": "h", "Sustentação": "", "Projetos": "", "Aderência": "%"}
+        for comparacao in visao["comparacoes"]:
+            unidade = unidades[comparacao["indicador"]]
+            rows.append([
+                comparacao["indicador"],
+                _formatar_valor_historico(comparacao["atual"], unidade),
+                _formatar_valor_historico(comparacao["anterior"], unidade),
+                _formatar_variacao(comparacao["diferenca"], unidade),
+                _formatar_variacao(comparacao["variacao_pct"], "%"),
+            ])
+        adicionar_tabela(doc, ["Indicador", "Atual", "Anterior", "Diferença", "Variação"],
+                          rows, [4.5, 2.7, 2.7, 3, 3])
+    else:
+        adicionar_nota(doc, "Ainda não há outro período histórico disponível para comparação.")
+
+    if visao["tendencia"]:
+        adicionar_titulo(doc, "Tendência Histórica", nivel=2)
+        adicionar_paragrafo(doc, "Série dos meses já consolidados, sem reprocessar os Excels anteriores.")
+        for caminho in dados["img_historico"]:
+            adicionar_imagem(doc, caminho, 13)
+    else:
+        adicionar_nota(doc, "A tendência será exibida quando houver pelo menos três meses históricos.")
+
+    if visao["projecao"]:
+        adicionar_titulo(doc, "Projeção do Próximo Mês", nivel=2)
+        adicionar_paragrafo(doc, "ESTIMATIVA baseada na média móvel simples dos três últimos meses; não é uma previsão garantida.", italic=True)
+        rows = [[nome, _formatar_valor_historico(valor, "%" if nome in ("Taxa de resolução", "Aderência") else "h" if nome == "TMR" else "")]
+                for nome, valor in visao["projecao"].items()]
+        adicionar_tabela(doc, ["Indicador", "Estimativa"], rows, [8, 5])
+    else:
+        adicionar_nota(doc, "A projeção será exibida quando houver pelo menos três meses históricos.")
 
     # ---- 1. Painel Geral ----
     adicionar_titulo(doc, "1. Painel Geral")
@@ -838,8 +1114,9 @@ def montar_documento(dados: dict, caminho_saida: str):
 # ============================================================================
 
 def gerar_relatorio(caminho_xlsx: str):
-    _preparar_pasta_saida()
-    pasta = CONFIG["pasta_saida"]
+    timestamp_execucao = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    pasta = os.path.join(CONFIG["pasta_saida"], timestamp_execucao)
+    _preparar_pasta_saida(pasta)
 
     print(f"[1/5] Lendo e limpando dados de {caminho_xlsx} ...")
     m = preparar_dataframe(caminho_xlsx)
@@ -867,12 +1144,37 @@ def gerar_relatorio(caminho_xlsx: str):
     tabela_projetos = tabela_frente_secundaria(m, F_PROJ)
     recorrencia = detectar_recorrencia(m, CONFIG["termos_chave_recorrencia"])
 
+    periodo = f"{ano:04d}-{mes:02d}"
+    historico_atual = _metricas_historicas(
+        periodo_texto, painel_total, painel_sust, painel_proj,
+        cap_sust, cap_proj, cat_sust_full, cat_proj_full,
+        outliers_sust, recorrencia,
+    )
+    historico_atual["periodo"] = periodo
+    historico_anterior = [registro for registro in carregar_historico()
+                          if registro.get("periodo") != periodo]
+    visao_historica = preparar_visao_historica(historico_anterior, historico_atual)
+
     print("[3/5] Gerando gráficos ...")
     img_donut = os.path.join(pasta, "01_donut_natureza.png")
     img_barras_sust = os.path.join(pasta, "02_barras_categoria_sustentacao.png")
     img_scatter_sust = os.path.join(pasta, "03_scatter_sustentacao.png")
     img_pizza = os.path.join(pasta, "04_pizza_horas_frente.png")
     img_linha_recorrencia = os.path.join(pasta, "05_linha_recorrencia.png")
+    img_historico = []
+    serie_historica = sorted(historico_anterior + [historico_atual],
+                             key=lambda item: item["periodo"])
+    if len(serie_historica) >= 2:
+        img_volume = os.path.join(pasta, "06_evolucao_volume.png")
+        img_tmr = os.path.join(pasta, "07_evolucao_tmr.png")
+        img_taxa = os.path.join(pasta, "08_evolucao_taxa_resolucao.png")
+        grafico_evolucao_historica(serie_historica, "total", "total",
+                                   "Evolução Mensal — Volume de Chamados", img_volume)
+        grafico_evolucao_historica(serie_historica, "total", "tmr_h",
+                                   "Evolução Mensal — TMR", img_tmr, "h")
+        grafico_evolucao_historica(serie_historica, "total", "taxa_resolucao",
+                                   "Evolução Mensal — Taxa de Resolução", img_taxa, "%")
+        img_historico = [img_volume, img_tmr, img_taxa]
 
     grafico_donut_natureza(painel_total, img_donut)
     grafico_barras_categoria(cat_sust, f"{F_SUST} — Volume por Categoria ({painel_sust['total']} chamados)",
@@ -892,12 +1194,16 @@ def gerar_relatorio(caminho_xlsx: str):
         cap_sust=cap_sust, cap_proj=cap_proj,
         tabela_projetos=tabela_projetos,
         recorrencia=recorrencia,
+        historico_atual=historico_atual,
+        visao_historica=visao_historica,
+        img_historico=img_historico,
         img_donut=img_donut, img_barras_sust=img_barras_sust,
         img_scatter_sust=img_scatter_sust, img_pizza=img_pizza,
         img_linha_recorrencia=img_linha_recorrencia,
     )
     caminho_docx = os.path.join(pasta, CONFIG["nome_docx"])
     montar_documento(dados, caminho_docx)
+    salvar_historico(historico_atual)
 
     print(f"[5/5] Concluído! Relatório salvo em: {caminho_docx}")
     return caminho_docx
@@ -907,6 +1213,6 @@ if __name__ == "__main__":
     entrada = sys.argv[1] if len(sys.argv) > 1 else CONFIG["arquivo_entrada"]
     if not os.path.exists(entrada):
         print(f"Arquivo não encontrado: {entrada}")
-        print("Uso: python3 gerar_relatorio_glpi.py caminho/para/base_de_dados.xlsx")
+        print("Uso: python3 gerar_relatorio_glpi.py caminho/para/base_de_dados.xlsx|csv")
         sys.exit(1)
     gerar_relatorio(entrada)
