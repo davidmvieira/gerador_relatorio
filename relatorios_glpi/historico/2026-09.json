@@ -1,0 +1,188 @@
+{
+  "periodo": "2026-09",
+  "periodo_texto": "01 a 30 de Setembro de 2026",
+  "total": {
+    "novos": 180,
+    "entregues": 167,
+    "backlog_inicial": 20,
+    "backlog_final": 33,
+    "carga_total": 200,
+    "taxa_resolucao": 83.5,
+    "tmr_h": 59.9,
+    "solicitacoes": 161,
+    "incidentes": 39,
+    "outros": 0
+  },
+  "sustentacao": {
+    "novos": 178,
+    "entregues": 163,
+    "backlog_inicial": 8,
+    "backlog_final": 23,
+    "carga_total": 186,
+    "taxa_resolucao": 87.6,
+    "tmr_h": 41.3,
+    "solicitacoes": 152,
+    "incidentes": 34,
+    "outros": 0
+  },
+  "projetos": {
+    "novos": 2,
+    "entregues": 4,
+    "backlog_inicial": 12,
+    "backlog_final": 10,
+    "carga_total": 14,
+    "taxa_resolucao": 28.6,
+    "tmr_h": 820.8,
+    "solicitacoes": 9,
+    "incidentes": 5,
+    "outros": 0
+  },
+  "status_total": {
+    "Novo": 16,
+    "Processando": 10,
+    "Pendente": 0,
+    "Planejado": 7,
+    "Solucionado": 135,
+    "Fechado": 32
+  },
+  "capacidade": {
+    "sustentacao": {
+      "hmm": 960.0,
+      "he": 872.0,
+      "hpc": 6726.9,
+      "hha": 840.9,
+      "ad_pct": 96.4
+    },
+    "projetos": {
+      "hmm": 960.0,
+      "he": 872.0,
+      "hpc": 3283.1,
+      "hha": 410.4,
+      "ad_pct": 47.1
+    }
+  },
+  "aderencia_pct": 96.4,
+  "outliers": {
+    "qtd_atencao": 13,
+    "qtd_critico": 6,
+    "maior_tempo_h": 670.5
+  },
+  "categorias": {
+    "sustentacao": [
+      {
+        "categoria": "AGHU-X",
+        "qtd": 51,
+        "tempo_h": 2052.9,
+        "pct_qtd": 27.4,
+        "pct_tempo": 30.5
+      },
+      {
+        "categoria": "Intranet",
+        "qtd": 40,
+        "tempo_h": 853.4,
+        "pct_qtd": 21.5,
+        "pct_tempo": 12.7
+      },
+      {
+        "categoria": "Sem categoria",
+        "qtd": 27,
+        "tempo_h": 328.4,
+        "pct_qtd": 14.5,
+        "pct_tempo": 4.9
+      },
+      {
+        "categoria": "Publicação em Sites",
+        "qtd": 11,
+        "tempo_h": 278.8,
+        "pct_qtd": 5.9,
+        "pct_tempo": 4.1
+      },
+      {
+        "categoria": "AGHU",
+        "qtd": 11,
+        "tempo_h": 1145.3,
+        "pct_qtd": 5.9,
+        "pct_tempo": 17.0
+      },
+      {
+        "categoria": "API Exames",
+        "qtd": 6,
+        "tempo_h": 248.0,
+        "pct_qtd": 3.2,
+        "pct_tempo": 3.7
+      },
+      {
+        "categoria": "Publicação",
+        "qtd": 5,
+        "tempo_h": 233.4,
+        "pct_qtd": 2.7,
+        "pct_tempo": 3.5
+      },
+      {
+        "categoria": "SCNES",
+        "qtd": 5,
+        "tempo_h": 116.1,
+        "pct_qtd": 2.7,
+        "pct_tempo": 1.7
+      },
+      {
+        "categoria": "CNES",
+        "qtd": 4,
+        "tempo_h": 22.7,
+        "pct_qtd": 2.2,
+        "pct_tempo": 0.3
+      },
+      {
+        "categoria": "Desenvolvimento de aplicações",
+        "qtd": 3,
+        "tempo_h": 94.8,
+        "pct_qtd": 1.6,
+        "pct_tempo": 1.4
+      }
+    ],
+    "projetos": [
+      {
+        "categoria": "Sistemas de Informação",
+        "qtd": 4,
+        "tempo_h": 3193.7,
+        "pct_qtd": 28.6,
+        "pct_tempo": 97.3
+      },
+      {
+        "categoria": "AGHU-X",
+        "qtd": 3,
+        "tempo_h": 0.0,
+        "pct_qtd": 21.4,
+        "pct_tempo": 0.0
+      },
+      {
+        "categoria": "Sem categoria",
+        "qtd": 3,
+        "tempo_h": 0.0,
+        "pct_qtd": 21.4,
+        "pct_tempo": 0.0
+      },
+      {
+        "categoria": "AGHU",
+        "qtd": 2,
+        "tempo_h": 0.0,
+        "pct_qtd": 14.3,
+        "pct_tempo": 0.0
+      },
+      {
+        "categoria": "Impressão de Etiquetas",
+        "qtd": 1,
+        "tempo_h": 89.4,
+        "pct_qtd": 7.1,
+        "pct_tempo": 2.7
+      },
+      {
+        "categoria": "CNES",
+        "qtd": 1,
+        "tempo_h": 0.0,
+        "pct_qtd": 7.1,
+        "pct_tempo": 0.0
+      }
+    ]
+  }
+}
