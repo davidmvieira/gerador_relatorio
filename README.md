@@ -44,6 +44,32 @@ Abra `http://127.0.0.1:5000`, envie o CSV/Excel, revise os dados, salve as
 alterações e confirme a geração. As execuções ficam em
 `relatorios_glpi/execucoes/YYYYMMDD_HHMMSS/`.
 
+## Persistência das sessões web
+
+Cada upload recebe um identificador UUID e cria um arquivo JSON em
+`instance/sessoes/<id_sessao>.json`. Esse arquivo é a fonte da verdade da
+revisão e contém os registros editáveis, mês de referência, nome de origem,
+validações, timestamps e resultado da geração. Datas são armazenadas em ISO
+8601; colunas derivadas são reconstruídas por `preparar_dataframe` ao carregar.
+
+Toda edição, alteração em lote, seleção de mês ou resultado é gravada com
+substituição atômica. Antes de uma atualização, a versão válida anterior é
+preservada em `instance/sessoes/<id_sessao>.json.bak`. Arquivos temporários e
+locks internos não são fontes de estado. O upload em `instance/uploads/` é
+removido após a leitura do arquivo.
+
+Por padrão, sessões sem atualização por mais de 7 dias e seus backups são
+removidos durante a inicialização do app. Altere esse prazo com a variável de
+ambiente `GLPI_SESSION_TTL_DAYS` (dias inteiros). O DOCX continua em
+`relatorios_glpi/execucoes/`; a sessão JSON apenas mantém o caminho e os dados
+necessários para consultar e baixar o resultado.
+
+Em reload do módulo no mesmo processo, uma sessão antiga ainda presente no
+dict legado `SESSOES` é convertida para JSON no primeiro acesso e removida do
+dict. Um reinício completo de um processo da versão antiga não pode recuperar
+sessões que nunca foram gravadas em disco; antes de encerrar essa versão,
+conclua ou exporte qualquer revisão ainda ativa.
+
 O resultado fica em uma pasta própria dentro de
 `./relatorios_glpi/execucoes/`, nomeada com o timestamp da execução, por
 exemplo: `relatorios_glpi/execucoes/2026-09-16_21-55-03_123456/`.

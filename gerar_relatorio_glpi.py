@@ -1216,6 +1216,20 @@ def montar_documento(dados: dict, caminho_saida: str):
 # 7. ORQUESTRAÇÃO
 # =============================================================================
 def gerar_relatorio_dataframe(m: pd.DataFrame, ano: int, mes: int):
+    colunas_periodo = {"novo_no_mes", "entregue_no_mes"}
+    faltantes = colunas_periodo - set(m.columns)
+    if faltantes:
+        raise ValueError(
+            "DataFrame sem flags do período: "
+            f"{', '.join(sorted(faltantes))}. Execute "
+            "filtrar_periodo_referencia() antes de gerar o relatório."
+        )
+    if m.empty:
+        raise ValueError(
+            f"Nenhum chamado relevante para {ano:04d}-{mes:02d}; "
+            "o relatório não foi iniciado."
+        )
+
     pasta = _nova_pasta_execucao()
     logger.info("[1/5] Preparando dados do período %04d-%02d ...", ano, mes)
     txt_periodo = periodo_texto(ano, mes)

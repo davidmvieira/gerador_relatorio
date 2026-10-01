@@ -1,38 +1,262 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Revisão · Gerador GLPI</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Revisão · Gerador GLPI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
 <main class="shell wide">
-  <header class="topbar"><div><p class="eyebrow">GLPI · revisão</p><h1>Prévia editável</h1><p class="muted">Os dados abaixo já passaram pela leitura e normalização usadas no relatório.</p></div><a class="link" href="{{ url_for('index') }}">Nova carga</a></header>
-  {% with messages = get_flashed_messages(with_categories=true) %}{% for categoria, mensagem in messages %}<div class="alert {{ categoria }}">{{ mensagem }}</div>{% endfor %}{% endwith %}
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">GLPI · revisão</p>
+      <h1>Prévia editável</h1>
+      <p class="muted">Dados normalizados. Separe por aba antes de gerar o relatório.</p>
+    </div>
+    <a class="link" href="{{ url_for('index') }}">Nova carga</a>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for categoria, mensagem in messages %}
+      <div class="alert {{ categoria }}">{{ mensagem }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  <nav class="tabs" role="tablist">
+    <a role="tab" class="tab {% if frente == 'sustentacao' %}active{% endif %}"
+       href="{{ url_for('revisao', id_sessao=sessao, frente='sustentacao') }}">
+      Sustentação <span class="badge">{{ total_sust }}</span>
+    </a>
+    <a role="tab" class="tab {% if frente == 'projetos' %}active{% endif %}"
+       href="{{ url_for('revisao', id_sessao=sessao, frente='projetos') }}">
+      Projetos <span class="badge">{{ total_proj }}</span>
+    </a>
+  </nav>
+
   <section class="metrics">
-    <div><span>Total</span><strong>{{ indicadores.total }}</strong></div><div><span>Resolvidos</span><strong>{{ indicadores.resolvidos }}</strong></div><div><span>Taxa</span><strong>{{ indicadores.taxa }}%</strong></div><div><span>TMR</span><strong>{{ indicadores.tmr if indicadores.tmr is not none else '—' }}{% if indicadores.tmr is not none %} h{% endif %}</strong></div><div><span>Sustentação</span><strong>{{ indicadores.sustentacao }}</strong></div><div><span>Projetos</span><strong>{{ indicadores.projetos }}</strong></div>
+    <div><span>Relevantes ({{ frente_nome }})</span><strong>{{ indicadores.total }}</strong></div>
+    <div><span>Entregues</span><strong>{{ indicadores.resolvidos }}</strong></div>
+    <div><span>Taxa</span><strong>{{ indicadores.taxa }}%</strong></div>
+    <div><span>TMR</span><strong>{% if indicadores.tmr is not none %}{{ indicadores.tmr }} h{% else %}—{% endif %}</strong></div>
   </section>
-  {% if erros %}<div class="validation error"><b>Erros impeditivos</b><ul>{% for item in erros %}<li>{{ item }}</li>{% endfor %}</ul></div>{% endif %}
-  {% if avisos %}<div class="validation warning"><b>Avisos</b><ul>{% for item in avisos %}<li>{{ item }}</li>{% endfor %}</ul></div>{% endif %}
-  <form method="post" action="{{ url_for('salvar_revisao', id_sessao=sessao) }}">
+
+  {% if erros %}
+    <div class="validation error"><b>Erros impeditivos</b>
+      <ul>{% for item in erros %}<li>{{ item }}</li>{% endfor %}</ul></div>
+  {% endif %}
+  {% if avisos %}
+    <div class="validation warning"><b>Avisos</b>
+      <ul>{% for item in avisos %}<li>{{ item }}</li>{% endfor %}</ul></div>
+  {% endif %}
+
+  <section class="filters-card">
+    <form method="get" action="{{ url_for('revisao', id_sessao=sessao) }}" class="filter-form">
+      <input type="hidden" name="frente" value="{{ frente }}">
+      <div class="filter-grid">
+        <label>Busca<input type="search" name="q" value="{{ filtros.q }}" placeholder="ID, título, técnico"></label>
+        <label>Entidade<input type="text" name="entidade" value="{{ filtros.entidade }}"></label>
+        <label>Categoria<input type="text" name="categoria" value="{{ filtros.categoria }}"></label>
+        <label>Status
+          <select name="status">
+            <option value="">Todos</option>
+            {% for codigo,nome in status.items() %}
+              <option value="{{ codigo }}" {% if filtros.status == codigo|string %}selected{% endif %}>{{ nome }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Prioridade
+          <select name="priority">
+            <option value="">Todas</option>
+            {% for codigo,nome in prioridades.items() %}
+              <option value="{{ codigo }}" {% if filtros.priority == codigo|string %}selected{% endif %}>{{ nome }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        {% if frente == 'sustentacao' %}
+          <label>Tipo
+            <select name="type">
+              <option value="">Todos</option>
+              {% for codigo,nome in tipos.items() %}
+                <option value="{{ codigo }}" {% if filtros.type == codigo|string %}selected{% endif %}>{{ nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        {% else %}
+          <label>Fase
+            <select name="fase">
+              <option value="">Todas</option>
+              {% for chave,nome in fases.items() %}
+                <option value="{{ chave }}" {% if filtros.fase == chave %}selected{% endif %}>{{ nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        {% endif %}
+        <label>Data início<input type="date" name="data_de" value="{{ filtros.data_de }}"></label>
+        <label>Data fim<input type="date" name="data_ate" value="{{ filtros.data_ate }}"></label>
+        <label>Mês referência<input type="month" name="mes_referencia" value="{{ mes_referencia }}"></label>
+      </div>
+      <div class="filter-actions">
+        <button type="submit" class="primary">Filtrar</button>
+        <a class="button secondary" href="{{ url_for('revisao', id_sessao=sessao, frente=frente) }}">Limpar</a>
+      </div>
+    </form>
+  </section>
+
+  <div class="toolbar sticky-toolbar">
+    <div class="toolbar-row">
+      <label class="select-all-toggle"><input id="select-all-page" type="checkbox"> Selecionar página</label>
+      <span class="counter">{{ total }} de {{ total_geral }} registros · aba {{ frente_nome }}</span>
+    </div>
+    <div class="bulk-form-wrap">
+      <form method="post" action="{{ url_for('bulk_revisao', id_sessao=sessao) }}" class="bulk-form" id="bulk-form">
+        <input type="hidden" name="frente" value="{{ frente }}">
+        <input type="hidden" name="mes_referencia" value="{{ mes_referencia }}">
+        <select name="bulk_status"><option value="">Status</option>{% for c,n in status.items() %}<option value="{{ c }}">{{ n }}</option>{% endfor %}</select>
+        <select name="bulk_priority"><option value="">Prioridade</option>{% for c,n in prioridades.items() %}<option value="{{ c }}">{{ n }}</option>{% endfor %}</select>
+        {% if frente == 'sustentacao' %}
+          <select name="bulk_type"><option value="">Tipo</option>{% for c,n in tipos.items() %}<option value="{{ c }}">{{ n }}</option>{% endfor %}</select>
+        {% else %}
+          <select name="bulk_fase"><option value="">Fase</option>{% for chave,nome in fases.items() %}<option value="{{ chave }}">{{ nome }}</option>{% endfor %}</select>
+        {% endif %}
+        <input type="text" name="bulk_categoria" placeholder="Categoria">
+        <input type="text" name="bulk_entidade" placeholder="Entidade">
+        <button type="submit" name="acao" value="bulk_edit" class="secondary">Aplicar</button>
+        <button type="submit" name="acao" value="excluir" class="danger">Excluir</button>
+        <button type="submit" name="acao" value="incluir" class="secondary">Incluir</button>
+      </form>
+    </div>
+  </div>
+
+  <form method="post" action="{{ url_for('salvar_revisao', id_sessao=sessao) }}" class="review-form" id="review-form">
     <input type="hidden" name="pagina" value="{{ pagina }}">
-    <div class="table-wrap"><table><thead><tr><th>ID</th><th>Título</th><th>Categoria</th><th>Entidade</th><th>Status</th><th>Prioridade</th><th>Tipo</th><th>Grupo/técnico</th><th>Observações</th><th>Abertura</th><th>Solução</th></tr></thead><tbody>
-    {% for r in registros %}<tr>
-      <td class="fixed">{{ r.id }}</td><td class="title">{{ r.name }}</td>
-      <td><input name="categoria_{{ r.indice }}" value="{{ r.categoria }}"></td>
-      <td><input name="entidade_{{ r.indice }}" value="{{ r.entidade }}"></td>
-      <td><select name="status_{{ r.indice }}">{% for codigo,nome in status.items() %}<option value="{{ codigo }}" {% if r.status == codigo %}selected{% endif %}>{{ nome }}</option>{% endfor %}</select></td>
-      <td><select name="priority_{{ r.indice }}">{% for codigo,nome in prioridades.items() %}<option value="{{ codigo }}" {% if r.priority == codigo %}selected{% endif %}>{{ nome }}</option>{% endfor %}</select></td>
-      <td><select name="type_{{ r.indice }}">{% for codigo,nome in tipos.items() %}<option value="{{ codigo }}" {% if r.type == codigo %}selected{% endif %}>{{ nome }}</option>{% endfor %}</select></td>
-      <td><input name="grupo_tecnico_{{ r.indice }}" value="{{ r.grupo_tecnico }}"></td>
-      <td><input name="observacoes_{{ r.indice }}" value="{{ r.observacoes }}"></td>
-      <td><input type="datetime-local" name="data_abertura_{{ r.indice }}" value="{{ r.data_abertura }}"></td>
-      <td><input type="datetime-local" name="data_solucao_{{ r.indice }}" value="{{ r.data_solucao }}"></td>
-    </tr>{% endfor %}
-    </tbody></table></div>
-    <div class="actions"><button type="submit">Salvar alterações</button></div>
+    <input type="hidden" name="mes_referencia" value="{{ mes_referencia }}">
+    <input type="hidden" name="frente" value="{{ frente }}">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="checkbox-cell"><input id="select-all" type="checkbox"></th>
+            <th><a href="{{ url_for('revisao', id_sessao=sessao, frente=frente, q=filtros.q, entidade=filtros.entidade, categoria=filtros.categoria, status=filtros.status, priority=filtros.priority, type=filtros.type, fase=filtros.fase, data_de=filtros.data_de, data_ate=filtros.data_ate, mes_referencia=mes_referencia, sort='id', dir='asc' if sort != 'id' or direcao == 'desc' else 'desc') }}">ID</a></th>
+            <th>Título</th>
+            <th>Categoria</th>
+            {% if frente == 'projetos' %}
+              <th>Entidade</th>
+              <th><a href="{{ url_for('revisao', id_sessao=sessao, frente=frente, q=filtros.q, entidade=filtros.entidade, categoria=filtros.categoria, status=filtros.status, priority=filtros.priority, type=filtros.type, fase=filtros.fase, data_de=filtros.data_de, data_ate=filtros.data_ate, mes_referencia=mes_referencia, sort='fase', dir='asc' if sort != 'fase' or direcao == 'desc' else 'desc') }}">Fase</a></th>
+            {% endif %}
+            <th><a href="{{ url_for('revisao', id_sessao=sessao, frente=frente, q=filtros.q, entidade=filtros.entidade, categoria=filtros.categoria, status=filtros.status, priority=filtros.priority, type=filtros.type, fase=filtros.fase, data_de=filtros.data_de, data_ate=filtros.data_ate, mes_referencia=mes_referencia, sort='status', dir='asc' if sort != 'status' or direcao == 'desc' else 'desc') }}">Status</a></th>
+            <th><a href="{{ url_for('revisao', id_sessao=sessao, frente=frente, q=filtros.q, entidade=filtros.entidade, categoria=filtros.categoria, status=filtros.status, priority=filtros.priority, type=filtros.type, fase=filtros.fase, data_de=filtros.data_de, data_ate=filtros.data_ate, mes_referencia=mes_referencia, sort='priority', dir='asc' if sort != 'priority' or direcao == 'desc' else 'desc') }}">Prioridade</a></th>
+            {% if frente == 'sustentacao' %}<th>Tipo</th>{% endif %}
+            <th>Grupo/técnico</th>
+            <th>Observações</th>
+            <th><a href="{{ url_for('revisao', id_sessao=sessao, frente=frente, q=filtros.q, entidade=filtros.entidade, categoria=filtros.categoria, status=filtros.status, priority=filtros.priority, type=filtros.type, fase=filtros.fase, data_de=filtros.data_de, data_ate=filtros.data_ate, mes_referencia=mes_referencia, sort='data_abertura', dir='asc' if sort != 'data_abertura' or direcao == 'desc' else 'desc') }}">Abertura</a></th>
+            <th>Solução</th>
+            <th>Incluir</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in registros %}
+          <tr {% if not r.incluir %}class="row-disabled"{% endif %}>
+            <td class="checkbox-cell"><input type="checkbox" class="row-select" name="selecionados" value="{{ r.indice }}" form="bulk-form"></td>
+            <td class="fixed">{{ r.id }}</td>
+            <td class="title">{{ r.name }}</td>
+            <td><input name="categoria_{{ r.indice }}" value="{{ r.categoria }}"></td>
+            {% if frente == 'projetos' %}
+              <td><input name="entidade_{{ r.indice }}" value="{{ r.entidade }}"></td>
+              <td>
+                <select name="fase_{{ r.indice }}" class="fase-select fase-{{ r.fase }}">
+                  {% for chave,nome in fases.items() %}
+                    <option value="{{ chave }}" {% if r.fase == chave %}selected{% endif %}>{{ nome }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+            {% else %}
+              <td><input name="entidade_{{ r.indice }}" value="{{ r.entidade }}"></td>
+            {% endif %}
+            <td><select name="status_{{ r.indice }}">{% for c,n in status.items() %}<option value="{{ c }}" {% if r.status == c %}selected{% endif %}>{{ n }}</option>{% endfor %}</select></td>
+            <td><select name="priority_{{ r.indice }}">{% for c,n in prioridades.items() %}<option value="{{ c }}" {% if r.priority == c %}selected{% endif %}>{{ n }}</option>{% endfor %}</select></td>
+            {% if frente == 'sustentacao' %}
+              <td><select name="type_{{ r.indice }}">{% for c,n in tipos.items() %}<option value="{{ c }}" {% if r.type == c %}selected{% endif %}>{{ n }}</option>{% endfor %}</select></td>
+            {% endif %}
+            <td><input name="grupo_tecnico_{{ r.indice }}" value="{{ r.grupo_tecnico }}"></td>
+            <td><input name="observacoes_{{ r.indice }}" value="{{ r.observacoes }}"></td>
+            <td><input type="datetime-local" name="data_abertura_{{ r.indice }}" value="{{ r.data_abertura }}"></td>
+            <td><input type="datetime-local" name="data_solucao_{{ r.indice }}" value="{{ r.data_solucao }}"></td>
+            <td class="checkbox-cell"><input type="checkbox" name="incluir_{{ r.indice }}" {% if r.incluir %}checked{% endif %}></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="actions-row">
+      <button type="submit" class="primary" id="save-button">Salvar alterações</button>
+      <a class="button secondary" href="{{ url_for('preview', id_sessao=sessao, mes_referencia=mes_referencia) }}" target="_blank">Ver prévia</a>
+    </div>
   </form>
-  <nav class="pagination">{% if pagina > 1 %}<a href="{{ url_for('revisao', id_sessao=sessao, pagina=pagina-1) }}">Anterior</a>{% endif %}<span>Página {{ pagina }} de {{ total_paginas }} · {{ total }} registros</span>{% if pagina < total_paginas %}<a href="{{ url_for('revisao', id_sessao=sessao, pagina=pagina+1) }}">Próxima</a>{% endif %}</nav>
-  <section class="confirm"><h2>Confirmação</h2><p>Período: <b>{{ registros[0].data_abertura[:7] if registros else '—' }}</b> · Registros: <b>{{ total }}</b></p><form method="post" action="{{ url_for('gerar', id_sessao=sessao) }}"><button {% if erros %}disabled title="Corrija os erros antes de gerar"{% endif %}>Gerar relatório</button></form></section>
+
+  <nav class="pagination">
+    {% if pagina > 1 %}
+      <a href="{{ url_for('revisao', id_sessao=sessao, frente=frente, q=filtros.q, entidade=filtros.entidade, categoria=filtros.categoria, status=filtros.status, priority=filtros.priority, type=filtros.type, fase=filtros.fase, data_de=filtros.data_de, data_ate=filtros.data_ate, mes_referencia=mes_referencia, pagina=pagina-1, sort=sort, dir=direcao) }}">Anterior</a>
+    {% endif %}
+    <span>Página {{ pagina }} de {{ total_paginas }} · {{ total }} registros</span>
+    {% if pagina < total_paginas %}
+      <a href="{{ url_for('revisao', id_sessao=sessao, frente=frente, q=filtros.q, entidade=filtros.entidade, categoria=filtros.categoria, status=filtros.status, priority=filtros.priority, type=filtros.type, fase=filtros.fase, data_de=filtros.data_de, data_ate=filtros.data_ate, mes_referencia=mes_referencia, pagina=pagina+1, sort=sort, dir=direcao) }}">Próxima</a>
+    {% endif %}
+  </nav>
+
+  <section class="confirm">
+    <h2>Confirmação</h2>
+    <p>Período: <b>{{ mes_referencia }}</b> · Aba: <b>{{ frente_nome }}</b> · Registros ativos: <b>{{ total }}</b></p>
+    <form method="post" action="{{ url_for('gerar', id_sessao=sessao) }}">
+      <input type="hidden" name="mes_referencia" value="{{ mes_referencia }}">
+      <button {% if erros %}disabled title="Corrija os erros antes de gerar"{% endif %} class="primary">Gerar relatório (ambas as frentes)</button>
+    </form>
+  </section>
 </main>
+
+<script>
+  const selectAll = document.getElementById('select-all');
+  const selectAllPage = document.getElementById('select-all-page');
+  const rowSelects = document.querySelectorAll('.row-select');
+
+  function syncSelectAll() {
+    const marcados = [...rowSelects].filter((el) => el.checked).length;
+    const total = rowSelects.length;
+    if (selectAll) selectAll.checked = marcados === total && total > 0;
+    if (selectAllPage) selectAllPage.checked = selectAll?.checked ?? false;
+  }
+
+  if (selectAll) {
+    selectAll.addEventListener('change', () => {
+      rowSelects.forEach((el) => { el.checked = selectAll.checked; });
+      if (selectAllPage) selectAllPage.checked = selectAll.checked;
+    });
+  }
+  if (selectAllPage) {
+    selectAllPage.addEventListener('change', () => {
+      rowSelects.forEach((el) => { el.checked = selectAllPage.checked; });
+      if (selectAll) selectAll.checked = selectAllPage.checked;
+    });
+  }
+  rowSelects.forEach((el) => el.addEventListener('change', syncSelectAll));
+
+  document.querySelectorAll('form').forEach((form) => {
+    form.addEventListener('submit', () => {
+      const button = form.querySelector('button[type="submit"]');
+      if (button) {
+        button.disabled = true;
+        button.classList.add('loading');
+      }
+    });
+  });
+
+  // Pinta o select de fase conforme a fase atual para leitura rápida
+  document.querySelectorAll('.fase-select').forEach((sel) => {
+    sel.addEventListener('change', () => {
+      sel.className = 'fase-select fase-' + sel.value;
+    });
+  });
+</script>
 </body>
 </html>

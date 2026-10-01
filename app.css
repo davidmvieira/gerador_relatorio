@@ -1,0 +1,61 @@
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 16px 0;
+  border-bottom: 2px solid #e0e0e0;
+}
+.tab {
+  padding: 10px 20px;
+  border: none;
+  background: transparent;
+  color: #666;
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.tab:hover { color: #1F3864; }
+.tab.active {
+  color: #1F3864;
+  border-bottom-color: #1F3864;
+}
+.tab .badge {
+  background: #e0e0e0;
+  color: #333;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.tab.active .badge {
+  background: #1F3864;
+  color: white;
+}
+
+/* Badges de fase */
+.fase-select {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  font-size: 12px;
+}
+.badge-fase {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.fase-backlog         { background: #ECEFF1; color: #455A64; }
+.fase-planejamento    { background: #E3F2FD; color: #0D47A1; }
+.fase-fila            { background: #FFF3E0; color: #E65100; }
+.fase-desenvolvimento { background: #E8F5E9; color: #1B5E20; }
+.fase-bloqueado       { background: #FFEBEE; color: #B71C1C; }
+.fase-testes          { background: #F3E5F5; color: #4A148C; }
+.fase-finalizados     { background: #E0F2F1; color: #004D40; }

@@ -1,0 +1,26 @@
+<section class="preview-section">
+  <h2>Projetos relevantes</h2>
+  <div class="preview-card">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th><th>Título</th><th>Entidade</th><th>Fase</th>
+          <th>Status</th><th>Abertura</th><th>Tempo</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for linha in projetos %}
+          <tr>
+            <td>{{ linha.id }}</td>
+            <td>{{ linha.titulo_limpo }}</td>
+            <td>{{ linha.entidade }}</td>
+            <td><span class="badge-fase fase-{{ linha.fase }}">{{ linha.fase_nome }}</span></td>
+            <td>{{ linha.status_nome }}</td>
+            <td>{{ linha.data_abertura_fmt }}</td>
+            <td>{{ '%.1f'|format(linha.tempo_h) if linha.tempo_h == linha.tempo_h else '—' }}h</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
