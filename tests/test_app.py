@@ -17,6 +17,9 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RAIZ)
 # O app limpa sessões antigas ao ser importado: com TTL alto, nada é apagado.
 os.environ["GLPI_SESSION_TTL_DAYS"] = "36500"
+# Configuração de teste isolada (nunca lê nem grava o instance/config.json real).
+_CONFIG_TMP = tempfile.TemporaryDirectory()
+os.environ["GLPI_CONFIG"] = os.path.join(_CONFIG_TMP.name, "config.json")
 
 from docx import Document  # noqa: E402
 
@@ -191,6 +194,53 @@ class TestFluxoWeb(unittest.TestCase):
                               content_type="multipart/form-data")
         depois = _arquivos(uploads) if os.path.isdir(uploads) else []
         self.assertEqual(antes, depois)
+
+    # ---------------- Fase 4: SLA institucional e configuração ----------------
+    def test_previa_mostra_sla_institucional(self):
+        html = self.cliente.get(f"/preview/{self.sessao}?mes_referencia=2026-08") \
+            .get_data(as_text=True)
+        sla = _texto_celulas_html(html, "4. SLA Institucional")
+        self.assertEqual(sla[0][:3], ["Classe", "Prioridades GLPI", "Prazo de solução"])
+        self.assertEqual(sla[3][:6], ["P3", "Média", "3 dias úteis", "107", "103", "96.3%"])
+        self.assertEqual(sla[-1][0], "Total")
+        self.assertIn("21 dias úteis no mês (pelo calendário do mês)", html)
+
+    def test_configuracao_salva_e_afeta_o_relatorio(self):
+        self.assertEqual(self.cliente.get("/configuracao").status_code, 200)
+        formulario = {
+            "titulo_relatorio": "Relatório de Teste", "subtitulo": "", "autor": "Equipe",
+            "entidade_sustentacao": "Sistemas", "max_categorias_detalhadas": "10",
+            "outlier_iqr_mult_tmr": "8", "analistas": "6", "horas_por_dia": "8",
+            "dias_uteis_mes": "", "dias_ferias_no_mes": "0", "feriados_nacionais": "on",
+            "feriados_extras": "2026-08-14",
+            **{f"prioridade_{p}": c for p, c in
+               {6: "P1", 5: "P1", 4: "P2", 3: "P3", 2: "P4", 1: "P4"}.items()},
+            **{f"meta_{c}_valor": v for c, v in
+               {"P1": "4", "P2": "8", "P3": "1", "P4": "5"}.items()},
+            **{f"meta_{c}_unidade": u for c, u in
+               {"P1": "horas", "P2": "horas", "P3": "dias_uteis",
+                "P4": "dias_uteis"}.items()},
+            "voltar": "//site-externo.com",
+        }
+        resposta = self.cliente.post("/configuracao", data=formulario)
+        self.assertEqual(resposta.status_code, 302)
+        self.assertEqual(resposta.headers["Location"], "/configuracao")  # sem redirect externo
+        self.assertTrue(os.path.exists(os.environ["GLPI_CONFIG"]))
+        html = self.cliente.get(f"/preview/{self.sessao}?mes_referencia=2026-08") \
+            .get_data(as_text=True)
+        self.assertIn("1 dias úteis", html)
+        self.assertIn("20 dias úteis no mês", html)  # 14/08 virou feriado extra
+
+    def test_configuracao_invalida_nao_grava(self):
+        caminho = os.environ["GLPI_CONFIG"]
+        if os.path.exists(caminho):
+            os.remove(caminho)
+        resposta = self.cliente.post("/configuracao", data={
+            "titulo_relatorio": "", "entidade_sustentacao": "Sistemas",
+            "feriados_extras": "31/12/2026"})
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Não foi possível salvar", resposta.get_data(as_text=True))
+        self.assertFalse(os.path.exists(caminho))
 
     def test_mes_sem_chamados(self):
         resposta = self.cliente.get(f"/preview/{self.sessao}?mes_referencia=2020-01")

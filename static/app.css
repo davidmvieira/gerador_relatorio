@@ -39,3 +39,19 @@
 details.validation summary{cursor:pointer}
 @media(max-width:900px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.report{padding:8px 16px 24px}}
 @media(max-width:600px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.month-chip{min-width:0;flex:1 1 140px}}
+
+/* ---- Tela de configuração ---- */
+.config-form{display:flex;flex-direction:column;gap:18px}
+.config-form fieldset{margin:0;padding:18px 20px;background:#fff;border:1px solid #d9e0ea;border-radius:8px}
+.config-form legend{padding:0 6px;font-weight:700;color:#1f3864}
+.config-form label{display:flex;flex-direction:column;gap:6px;margin:10px 0;font-weight:600;color:#1f3864}
+.config-form label.check{flex-direction:row;align-items:center;gap:8px;font-weight:500;color:#1f2937}
+.config-form input:not([type=checkbox]),.config-form select,.config-form textarea{padding:9px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#1f2937;font:inherit}
+.config-form small{font-weight:400;color:#64748b}
+.config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 16px}
+.config-grid.metas{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 16px}
+.meta-row{display:grid;grid-template-columns:36px 1fr 1.4fr;gap:8px;align-items:center}
+.meta-classe{font-weight:700;color:#1f3864}
+.config-form code{font-size:12px}
+.topbar-links{display:flex;gap:16px;flex-wrap:wrap}
+.topbar .link{white-space:nowrap}

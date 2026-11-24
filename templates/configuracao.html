@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Configuração · Gerador GLPI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+<main class="shell narrow config-page">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">GLPI · configuração</p>
+      <h1>Parâmetros do relatório</h1>
+      <p class="muted">Valem para a prévia e para o DOCX. Ficam gravados só nesta máquina, em <code>{{ caminho }}</code> (fora do git).</p>
+    </div>
+    <a class="link" href="{{ voltar or url_for('index') }}">← Voltar</a>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for categoria, mensagem in messages %}<div class="alert {{ categoria }}">{{ mensagem }}</div>{% endfor %}
+  {% endwith %}
+  {% if erros %}
+    <div class="validation error"><b>Não foi possível salvar</b>
+      <ul>{% for e in erros %}<li>{{ e }}</li>{% endfor %}</ul></div>
+  {% endif %}
+
+  <form method="post" class="config-form">
+    <input type="hidden" name="voltar" value="{{ voltar }}">
+
+    <fieldset>
+      <legend>Cabeçalho e escopo</legend>
+      <label>Título do relatório<input name="titulo_relatorio" value="{{ cfg.titulo_relatorio }}" required></label>
+      <label>Subtítulo<input name="subtitulo" value="{{ cfg.subtitulo }}"></label>
+      <label>Autor<input name="autor" value="{{ cfg.autor }}"></label>
+      <label>Entidade da frente Sustentação
+        <input name="entidade_sustentacao" value="{{ cfg.entidade_sustentacao }}" required>
+        <small>Nome exato da entidade no GLPI. As demais entidades formam a frente Projetos.</small>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>SLA institucional</legend>
+      <p class="hint">Classe de cada prioridade do GLPI. P1 é a mais crítica.</p>
+      <div class="config-grid">
+        {% for p in [6, 5, 4, 3, 2, 1] %}
+          <label>{{ prioridades[p] }}
+            <select name="prioridade_{{ p }}">
+              {% for c in classes %}<option value="{{ c }}" {% if mapa.get(p) == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+          </label>
+        {% endfor %}
+      </div>
+      <p class="hint">Prazo de solução de cada classe. Horas são corridas (24×7); dias úteis excluem fins de semana e feriados.</p>
+      <div class="config-grid metas">
+        {% for c in classes %}
+          {% set meta = cfg.sla.metas[c] %}
+          <div class="meta-row">
+            <span class="meta-classe">{{ c }}</span>
+            <input name="meta_{{ c }}_valor" type="number" min="0.5" step="0.5" value="{{ meta.valor|float|round(1)|string|replace('.0', '') }}" aria-label="Prazo {{ c }}">
+            <select name="meta_{{ c }}_unidade" aria-label="Unidade {{ c }}">
+              <option value="horas" {% if meta.unidade == 'horas' %}selected{% endif %}>horas</option>
+              <option value="dias_uteis" {% if meta.unidade == 'dias_uteis' %}selected{% endif %}>dias úteis</option>
+            </select>
+          </div>
+        {% endfor %}
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Calendário de dias úteis</legend>
+      <label class="check"><input type="checkbox" name="feriados_nacionais" {% if cfg.calendario.feriados_nacionais %}checked{% endif %}> Considerar feriados nacionais (calculados automaticamente, inclusive Sexta-feira Santa)</label>
+      <label>Feriados e pontos facultativos extras
+        <textarea name="feriados_extras" rows="4" placeholder="2026-02-16&#10;2026-02-17">{{ cfg.calendario.feriados_extras|join('\n') }}</textarea>
+        <small>Um por linha, no formato AAAA-MM-DD (estaduais, municipais, Carnaval, Corpus Christi…).</small>
+      </label>
+      {% if feriados %}
+        <details><summary>Feriados considerados em {{ ano }} ({{ feriados|length }})</summary>
+          <p class="hint">{% for d in feriados %}{{ d.strftime('%d/%m') }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+        </details>
+      {% endif %}
+    </fieldset>
+
+    <fieldset>
+      <legend>Capacidade da equipe</legend>
+      <div class="config-grid">
+        <label>Analistas<input name="analistas" type="number" min="1" step="1" value="{{ cfg.premissas_equipe.analistas }}"></label>
+        <label>Horas por dia<input name="horas_por_dia" type="number" min="1" step="0.5" value="{{ cfg.premissas_equipe.horas_por_dia }}"></label>
+        <label>Dias úteis no mês<input name="dias_uteis_mes" type="number" min="1" step="1" value="{{ cfg.premissas_equipe.dias_uteis_mes or '' }}" placeholder="automático"><small>Vazio = calculado pelo calendário.</small></label>
+        <label>Dias de férias/ausência<input name="dias_ferias_no_mes" type="number" min="0" step="1" value="{{ cfg.premissas_equipe.dias_ferias_no_mes }}"><small>Revise a cada mês.</small></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Leitura dos números</legend>
+      <div class="config-grid">
+        <label>Categorias detalhadas<input name="max_categorias_detalhadas" type="number" min="1" step="1" value="{{ cfg.max_categorias_detalhadas }}"><small>As demais viram “Outros”.</small></label>
+        <label>Multiplicador de outlier (IQR)<input name="outlier_iqr_mult_tmr" type="number" min="0.5" step="0.5" value="{{ cfg.outlier_iqr_mult_tmr }}"><small>Padrão validado: 8.</small></label>
+      </div>
+    </fieldset>
+
+    <div class="actions-row">
+      <button type="submit" class="primary">Salvar configuração</button>
+      <a class="button secondary" href="{{ voltar or url_for('index') }}">Cancelar</a>
+    </div>
+  </form>
+</main>
+</body>
+</html>

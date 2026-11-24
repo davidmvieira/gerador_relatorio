@@ -126,22 +126,42 @@ python gerar_relatorio_glpi.py base_ficticia_agosto_2026.csv
 Se os nomes das abas no seu export forem diferentes, ajuste
 `CONFIG["aba_principal"]` e `CONFIG["aba_detalhe"]` no topo do script.
 
-## O que ajustar todo mês (seção CONFIG no topo do arquivo)
+## Configuração (tela "Configuração" do app)
 
-- `entidade_sustentacao`: nome exato da entidade GLPI que representa a
-  sustentação corrente (hoje: `"Sistemas"`). Tudo que não for essa entidade
-  vira automaticamente a frente "Projetos".
-- `termos_chave_recorrencia` / `nome_recorrencia`: troque pelas palavras-chave
-  do problema mais quente do mês (ex.: nome de um sistema com bug recorrente).
-  Se não houver nada relevante, deixe a lista vazia (`[]`) que a seção 6 some
-  sozinha do relatório.
-- `premissas_equipe`: número de analistas, jornada, dias úteis do mês e dias
-  de férias/ausência — isso muda todo mês.
-- `outlier_iqr_mult`: quão "extremo" um chamado precisa ser para aparecer
-  destacado como outlier. Quanto maior, mais exigente (só pega casos muito
-  fora da curva). O padrão (8.0) foi calibrado para isolar só casos realmente
-  extremos, não qualquer chamado acima da média.
-- `pasta_historico`: diretório dos arquivos históricos mensais.
+Os parâmetros ficam em `instance/config.json`, local e fora do git, e são
+editados pela tela `/configuracao`. A linha de comando usa o mesmo arquivo.
+Sem esse arquivo, valem os padrões do `CONFIG` no topo do script.
+
+- **Cabeçalho e escopo**: título, subtítulo, autor e a entidade da frente
+  Sustentação. As demais entidades formam a frente Projetos.
+- **SLA institucional**: classe (P1–P4) de cada prioridade do GLPI e o prazo
+  de solução de cada classe, em horas corridas ou em dias úteis.
+  - Horas corridas: contadas desde a abertura, em regime 24×7.
+  - Dias úteis: vencem no fim do N-ésimo dia útil seguinte à abertura.
+  - O mapeamento padrão (Crítica e Muito Alta = P1, Alta = P2, Média = P3,
+    Baixa e Muito Baixa = P4) é provisório e deve ser validado com a gestão.
+  - O SLA de resposta não é medido, porque o export não traz a data do
+    primeiro atendimento.
+- **Calendário**: os feriados nacionais são calculados automaticamente,
+  inclusive a Sexta-feira Santa. Datas extras (estaduais, municipais, pontos
+  facultativos) são informadas uma por linha, no formato AAAA-MM-DD.
+- **Capacidade**: analistas, horas por dia e dias de férias ou ausência.
+  Revise as férias a cada mês. Os dias úteis do mês são calculados pelo
+  calendário, a menos que você informe outro valor.
+- **Outlier**: o multiplicador do IQR tem padrão 8, valor validado para este
+  dataset.
+
+## Dados e privacidade (LGPD)
+
+Os exports do GLPI trazem títulos de chamados que podem conter nomes de
+pessoas. Por isso o `.gitignore` mantém fora do repositório:
+
+- os exports (`dados_*.csv`, `*.xlsx`);
+- as sessões de revisão e a configuração local (`instance/`);
+- os relatórios gerados (`relatorios_glpi/execucoes/`).
+
+Os testes que usam o export real (`dados_202609301724.csv`) só rodam quando
+esse arquivo existe na máquina. Os demais testes usam dados sintéticos.
 
 ## Limitações conhecidas (e por quê)
 

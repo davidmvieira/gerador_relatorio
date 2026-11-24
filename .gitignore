@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Dados reais do GLPI (títulos de chamados podem conter nomes — LGPD).
+# Mantenha exports somente na máquina local.
+dados_*.csv
+*.xlsx
+*.xlsm
+
+# Estado local do app: sessões de revisão, configuração e uploads
+instance/
+
+# Saídas geradas e backups
+relatorios_glpi/execucoes/
+saida_relatorio/
+*.bak
+*.tmp
+
+# Ferramentas locais
+.claude/

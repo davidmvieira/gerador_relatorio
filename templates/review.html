@@ -14,7 +14,10 @@
       <h1>Prévia editável</h1>
       <p class="muted">Dados normalizados. Separe por aba antes de gerar o relatório.</p>
     </div>
-    <a class="link" href="{{ url_for('index') }}">Nova carga</a>
+    <nav class="topbar-links">
+      <a class="link" href="{{ url_for('configuracao', voltar=request.full_path) }}">Configuração</a>
+      <a class="link" href="{{ url_for('index') }}">Nova carga</a>
+    </nav>
   </header>
 
   {% with messages = get_flashed_messages(with_categories=true) %}

@@ -28,6 +28,7 @@ import shutil
 import logging
 import threading
 import argparse
+import copy
 from datetime import datetime
 from calendar import monthrange
 from typing import Optional
@@ -75,10 +76,21 @@ CONFIG = {
 
     "max_categorias_detalhadas": 10,
 
-    "sla_alvo_horas": {
-        "Crítica": 4.0, "Muito Alta": 8.0, "Alta": 24.0,
-        "Média": 48.0, "Baixa": 72.0, "Muito Baixa": 120.0,
+    # SLA institucional. Prioridade do GLPI (1 = Muito Baixa … 6 = Crítica)
+    # → classe P1 (mais crítica) … P4. Mapeamento provisório: validar com a gestão.
+    "sla": {
+        "mapa_prioridade": {6: "P1", 5: "P1", 4: "P2", 3: "P3", 2: "P4", 1: "P4"},
+        "metas": {
+            "P1": {"valor": 4, "unidade": "horas"},
+            "P2": {"valor": 8, "unidade": "horas"},
+            "P3": {"valor": 3, "unidade": "dias_uteis"},
+            "P4": {"valor": 5, "unidade": "dias_uteis"},
+        },
     },
+
+    # Dias úteis: feriados nacionais automáticos + datas extras (estaduais,
+    # municipais, pontos facultativos), no formato AAAA-MM-DD.
+    "calendario": {"feriados_nacionais": True, "feriados_extras": []},
 
     "outlier_iqr_mult_atencao": 1.5,
     "outlier_iqr_mult_critico": 3.0,
@@ -88,7 +100,7 @@ CONFIG = {
     "premissas_equipe": {
         "analistas": 6,
         "horas_por_dia": 8,
-        "dias_uteis_mes": 20,
+        "dias_uteis_mes": None,  # None = calculado pelo calendário do mês
         "dias_ferias_no_mes": 11,
     },
 
@@ -96,6 +108,141 @@ CONFIG = {
     "nome_docx": "Relatorio_Sistemas.docx",
     "pasta_historico": os.path.join("relatorios_glpi", "historico"),
 }
+
+# Padrões de fábrica: a configuração salva pelo usuário é aplicada por cima.
+CONFIG_PADRAO = copy.deepcopy(CONFIG)
+
+# Chaves que o usuário pode alterar (tela de configuração / config.json).
+CHAVES_EDITAVEIS = ("titulo_relatorio", "subtitulo", "autor", "entidade_sustentacao",
+                    "max_categorias_detalhadas", "outlier_iqr_mult_tmr",
+                    "premissas_equipe", "sla", "calendario")
+CLASSES_SLA = ("P1", "P2", "P3", "P4")
+UNIDADES_SLA = ("horas", "dias_uteis")
+
+
+def caminho_config() -> str:
+    """Arquivo local da configuração (fora do git): instance/config.json."""
+    return os.environ.get("GLPI_CONFIG") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "instance", "config.json")
+
+
+def _normalizar_config(valores: dict) -> dict:
+    """Converte tipos vindos de JSON/formulário (chaves int no mapa, números)."""
+    cfg = copy.deepcopy(valores)
+    sla = cfg.get("sla", {})
+    if "mapa_prioridade" in sla:
+        sla["mapa_prioridade"] = {int(k): str(v) for k, v in sla["mapa_prioridade"].items()}
+    for meta in sla.get("metas", {}).values():
+        meta["valor"] = float(meta["valor"])
+    premissas = cfg.get("premissas_equipe", {})
+    for chave in ("analistas", "horas_por_dia", "dias_ferias_no_mes"):
+        if chave in premissas:
+            premissas[chave] = float(premissas[chave])
+            if premissas[chave].is_integer():
+                premissas[chave] = int(premissas[chave])
+    if premissas.get("dias_uteis_mes") in ("", 0, "0"):
+        premissas["dias_uteis_mes"] = None
+    elif premissas.get("dias_uteis_mes") is not None:
+        premissas["dias_uteis_mes"] = int(premissas["dias_uteis_mes"])
+    if "max_categorias_detalhadas" in cfg:
+        cfg["max_categorias_detalhadas"] = int(cfg["max_categorias_detalhadas"])
+    if "outlier_iqr_mult_tmr" in cfg:
+        cfg["outlier_iqr_mult_tmr"] = float(cfg["outlier_iqr_mult_tmr"])
+    cal = cfg.get("calendario", {})
+    if "feriados_extras" in cal:
+        cal["feriados_extras"] = sorted({str(d).strip() for d in cal["feriados_extras"]
+                                         if str(d).strip()})
+    return cfg
+
+
+def validar_config(valores: dict) -> list:
+    """Lista de erros (vazia = válida). Não altera nada."""
+    erros = []
+    try:
+        cfg = _normalizar_config(valores)
+    except (TypeError, ValueError, AttributeError, KeyError) as erro:
+        return [f"Valor inválido: {erro}"]
+    for chave in ("titulo_relatorio", "entidade_sustentacao"):
+        if chave in cfg and not str(cfg[chave]).strip():
+            erros.append(f"'{chave}' não pode ficar vazio.")
+    p = cfg.get("premissas_equipe", {})
+    if p.get("analistas", 1) <= 0 or p.get("horas_por_dia", 1) <= 0:
+        erros.append("Analistas e horas por dia devem ser maiores que zero.")
+    if p.get("dias_ferias_no_mes", 0) < 0:
+        erros.append("Dias de férias/ausência não pode ser negativo.")
+    sla = cfg.get("sla", {})
+    for prioridade, classe in sla.get("mapa_prioridade", {}).items():
+        if prioridade not in range(1, 7) or classe not in CLASSES_SLA:
+            erros.append(f"Mapeamento inválido: prioridade {prioridade} → {classe}.")
+    for classe, meta in sla.get("metas", {}).items():
+        if classe not in CLASSES_SLA or meta.get("unidade") not in UNIDADES_SLA \
+                or meta["valor"] <= 0:
+            erros.append(f"Meta de SLA inválida para {classe}.")
+    for data in cfg.get("calendario", {}).get("feriados_extras", []):
+        if pd.isna(pd.to_datetime(data, format="%Y-%m-%d", errors="coerce")):
+            erros.append(f"Feriado extra inválido: '{data}' (use AAAA-MM-DD).")
+    if cfg.get("max_categorias_detalhadas", 1) < 1:
+        erros.append("Máximo de categorias deve ser ao menos 1.")
+    if cfg.get("outlier_iqr_mult_tmr", 1) <= 0:
+        erros.append("Multiplicador de outlier deve ser maior que zero.")
+    return erros
+
+
+def aplicar_config(valores: dict) -> None:
+    """Aplica (em memória) os valores editáveis sobre os padrões de fábrica."""
+    novo = copy.deepcopy(CONFIG_PADRAO)
+    novo.update({k: v for k, v in _normalizar_config(valores).items()
+                 if k in CHAVES_EDITAVEIS})
+    preservar = {k: CONFIG[k] for k in ("pasta_saida", "pasta_historico") if k in CONFIG}
+    CONFIG.clear()
+    CONFIG.update(novo)
+    CONFIG.update(preservar)
+
+
+def carregar_config(caminho: Optional[str] = None) -> list:
+    """Lê o config.json local (se existir) e aplica. Devolve erros encontrados."""
+    caminho = caminho or caminho_config()
+    if not os.path.isfile(caminho):
+        return []
+    try:
+        with open(caminho, "r", encoding="utf-8") as arquivo:
+            valores = json.load(arquivo)
+    except (OSError, json.JSONDecodeError) as erro:
+        logger.warning("Configuração ignorada (%s): %s", caminho, erro)
+        return [str(erro)]
+    erros = validar_config(valores)
+    if erros:
+        logger.warning("Configuração ignorada (%s): %s", caminho, "; ".join(erros))
+        return erros
+    aplicar_config(valores)
+    return []
+
+
+def salvar_config(valores: dict, caminho: Optional[str] = None) -> list:
+    """Valida, grava o config.json local e aplica. Devolve erros (vazio = salvo)."""
+    valores = {k: v for k, v in valores.items() if k in CHAVES_EDITAVEIS}
+    erros = validar_config(valores)
+    if erros:
+        return erros
+    cfg = _normalizar_config(valores)
+    caminho = caminho or caminho_config()
+    os.makedirs(os.path.dirname(caminho), exist_ok=True)
+    serializavel = copy.deepcopy(cfg)
+    if "sla" in serializavel:
+        serializavel["sla"]["mapa_prioridade"] = {
+            str(k): v for k, v in serializavel["sla"]["mapa_prioridade"].items()}
+    temporario = caminho + ".tmp"
+    with open(temporario, "w", encoding="utf-8") as arquivo:
+        json.dump(serializavel, arquivo, ensure_ascii=False, indent=2)
+    os.replace(temporario, caminho)
+    aplicar_config(cfg)
+    return []
+
+
+def config_editavel() -> dict:
+    """Valores atuais das chaves editáveis (para a tela)."""
+    return {k: copy.deepcopy(CONFIG[k]) for k in CHAVES_EDITAVEIS}
+
 
 COR = {
     "navy": "1F3864", "navy_rgb": (0x1F, 0x38, 0x64),
@@ -444,26 +591,34 @@ def compactar_categorias(cat_df: pd.DataFrame, top_n: int) -> pd.DataFrame:
     return pd.concat([top, outros])
 
 
-def metricas_sla_prioridade(m: pd.DataFrame, frente: str) -> pd.DataFrame:
-    """SLA sobre os ENTREGUES no mês (independente de quando foram abertos)."""
-    sub = m[(m["frente"] == frente) & m["entregue_no_mes"]].copy()
-    if sub.empty:
-        return pd.DataFrame(columns=["count", "mean", "min", "max",
-                                     "meta_h", "pct_dentro_sla"])
-    alvo = CONFIG["sla_alvo_horas"]
-    sub["meta_h"] = sub["prioridade_nome"].map(alvo)
-    sub["dentro_sla"] = sub["tempo_h"] <= sub["meta_h"]
+def feriados_configurados(anos) -> list:
+    cal = CONFIG["calendario"]
+    return metricas.calendario_feriados(anos, cal.get("feriados_extras", []),
+                                        cal.get("feriados_nacionais", True))
 
-    ordem = ["Crítica", "Muito Alta", "Alta", "Média", "Baixa", "Muito Baixa"]
-    g = sub.groupby("prioridade_nome").agg(
-        count=("tempo_h", "count"),
-        mean=("tempo_h", "mean"),
-        min=("tempo_h", "min"),
-        max=("tempo_h", "max"),
-        meta_h=("meta_h", "first"),
-        pct_dentro_sla=("dentro_sla", lambda s: round(s.mean() * 100, 1)),
-    ).round(1)
-    return g.reindex([o for o in ordem if o in g.index])
+
+def _anos_do_recorte(m: pd.DataFrame) -> range:
+    """Anos cobertos pelas aberturas e pelo corte, mais o seguinte (prazos que viram o ano)."""
+    datas = pd.to_datetime(m.get("data_abertura", m.get("date")), errors="coerce").dropna()
+    corte = m.attrs.get("corte", pd.Timestamp.now())
+    inicio = int(datas.min().year) if len(datas) else int(corte.year)
+    return range(inicio, int(corte.year) + 2)
+
+
+def metricas_sla(m: pd.DataFrame, frente: str) -> pd.DataFrame:
+    """SLA institucional (P1–P4) da frente: solucionados no mês e vencidos em aberto."""
+    sla = CONFIG["sla"]
+    sub = m[m["frente"] == frente]
+    avaliado = metricas.avaliar_sla(sub, sla["mapa_prioridade"], sla["metas"],
+                                    feriados_configurados(_anos_do_recorte(m)))
+    return metricas.resumo_sla(avaliado, sla["metas"])
+
+
+def pct_no_prazo(resumo: pd.DataFrame):
+    """% dos solucionados no mês que cumpriram o prazo, todas as classes juntas."""
+    if resumo.empty or not resumo["solucionados"].sum():
+        return None
+    return round(resumo["no_prazo"].sum() / resumo["solucionados"].sum() * 100, 1)
 
 
 def detectar_outliers(m: pd.DataFrame, frente: str) -> dict:
@@ -483,16 +638,30 @@ def detectar_outliers(m: pd.DataFrame, frente: str) -> dict:
             "limite_critico": round(float(lim_cr), 1)}
 
 
+def dias_uteis_do_mes(m: pd.DataFrame) -> tuple[int, bool]:
+    """(dias úteis, calculado automaticamente?) do mês do recorte."""
+    informado = CONFIG["premissas_equipe"].get("dias_uteis_mes")
+    if informado:
+        return int(informado), False
+    inicio = m.attrs.get("periodo_inicio")
+    if inicio is None:
+        return 0, True
+    return metricas.dias_uteis_no_mes(inicio.year, inicio.month,
+                                      feriados_configurados([inicio.year])), True
+
+
 def metricas_capacidade(m: pd.DataFrame, frente: str) -> dict:
     p = CONFIG["premissas_equipe"]
-    hmm = p["analistas"] * p["dias_uteis_mes"] * p["horas_por_dia"]
+    dias_uteis, automatico = dias_uteis_do_mes(m)
+    hmm = p["analistas"] * dias_uteis * p["horas_por_dia"]
     he = hmm - p["dias_ferias_no_mes"] * p["horas_por_dia"]
 
     sub = m[(m["frente"] == frente) & m["entregue_no_mes"]]
     hpc = round(float(sub["tempo_h"].sum()), 1)
     hha = round(hpc / p["horas_por_dia"], 1)
     ad_pct = round(hha / he * 100, 1) if he else 0
-    return {"hmm": hmm, "he": he, "hpc": hpc, "hha": hha, "ad_pct": ad_pct}
+    return {"hmm": hmm, "he": he, "hpc": hpc, "hha": hha, "ad_pct": ad_pct,
+            "dias_uteis": dias_uteis, "dias_uteis_automatico": automatico}
 
 
 def limpar_titulo(titulo: str, max_len: int = 70) -> str:
@@ -536,6 +705,7 @@ INDICADORES_HISTORICOS = [
     ("Sustentação — absorção", ("sustentacao", "taxa_resolucao"), "%"),
     ("Sustentação — TMR mediana", ("sustentacao", "tmr_mediana_h"), "h"),
     ("Sustentação — TMR média", ("sustentacao", "tmr_h"), "h"),
+    ("Sustentação — no prazo (SLA)", ("sustentacao", "sla_pct_no_prazo"), "%"),
     ("Projetos — abertos", ("projetos", "novos"), ""),
     ("Projetos — solucionados", ("projetos", "entregues"), ""),
     ("Projetos — backlog final", ("projetos", "backlog_final"), ""),
@@ -945,12 +1115,16 @@ def _descricao_periodo_anterior(atual: str, anterior: str) -> str:
 # da tela e o documento Word montam suas tabelas a partir daqui, então o que
 # aparece na tela é exatamente o que vai impresso.
 
+def _vazio(valor) -> bool:
+    return valor is None or (isinstance(valor, (float, np.floating)) and np.isnan(valor))
+
+
 def _h(valor) -> str:
-    return f"{valor} h" if valor is not None else "—"
+    return "—" if _vazio(valor) else f"{valor} h"
 
 
 def _p(valor) -> str:
-    return f"{valor}%" if valor is not None else "—"
+    return "—" if _vazio(valor) else f"{valor}%"
 
 
 def _saldo(valor) -> str:
@@ -1056,13 +1230,53 @@ def tabela_projetos(tab_proj: pd.DataFrame) -> tuple[list, list]:
     return ["ID", "Título", "Origem", "Status", "Abertura", "Solução", "Idade", "Horas"], linhas
 
 
+_NOMES_PRIORIDADE = {6: "Crítica", 5: "Muito Alta", 4: "Alta", 3: "Média",
+                     2: "Baixa", 1: "Muito Baixa"}
+
+
+def texto_meta_sla(meta: dict) -> str:
+    valor = _fmt_num(int(meta["valor"]) if float(meta["valor"]).is_integer() else meta["valor"])
+    return f"{valor} h corridas" if meta["unidade"] == "horas" else f"{valor} dias úteis"
+
+
 def tabela_sla(sla: pd.DataFrame) -> tuple[list, list]:
-    linhas = [[idx, int(r["count"]), f'{r["mean"]:.1f} h',
-               f'{r["min"]:.1f} h – {r["max"]:.1f} h',
-               _fmt_num(r["meta_h"], " h"), f'{r["pct_dentro_sla"]}%']
-              for idx, r in sla.iterrows()]
-    return ["Prioridade", "Solucionados", "Tempo Médio", "Faixa (mín–máx)",
-            "Meta SLA", "% Dentro do SLA"], linhas
+    metas = CONFIG["sla"]["metas"]
+    mapa = CONFIG["sla"]["mapa_prioridade"]
+    linhas = []
+    for _, r in sla.iterrows():
+        prioridades = ", ".join(_NOMES_PRIORIDADE[p] for p in sorted(mapa, reverse=True)
+                                if mapa[p] == r["classe"]) or "—"
+        linhas.append([r["classe"], prioridades, texto_meta_sla(metas[r["classe"]]),
+                       r["solucionados"], r["no_prazo"], _p(r["pct_no_prazo"]),
+                       _h(r["mediana_h"]), r["vencidos_em_aberto"]])
+    total_sol = int(sla["solucionados"].sum()) if len(sla) else 0
+    linhas.append(["Total", "", "", total_sol,
+                   int(sla["no_prazo"].sum()) if len(sla) else 0,
+                   _p(pct_no_prazo(sla)), "",
+                   int(sla["vencidos_em_aberto"].sum()) if len(sla) else 0])
+    return ["Classe", "Prioridades GLPI", "Prazo de solução", "Solucionados",
+            "No prazo", "% no prazo", "Mediana", "Vencidos em aberto"], linhas
+
+
+TEXTO_SLA = ("Prazo de solução por classe de criticidade (SLA institucional). Considera os "
+             "chamados SOLUCIONADOS no período, independente de quando foram abertos, e os "
+             "que terminaram o mês em aberto com o prazo vencido.")
+
+
+def notas_sla(dados: dict) -> list:
+    notas = [
+        "Prazo em horas: contado em horas corridas desde a abertura (atendimento 24×7). "
+        "Prazo em dias úteis: vence no fim do N-ésimo dia útil seguinte à abertura, "
+        "sem fins de semana e feriados configurados.",
+        "Vencidos em aberto: chamados ainda sem solução no fim do mês cujo prazo já passou.",
+        "SLA de resposta (primeiro atendimento) não é medido: o export do GLPI não traz "
+        "a data do primeiro atendimento.",
+    ]
+    sem_classe = dados["sla_sust"].attrs.get("sem_classe", 0)
+    if sem_classe:
+        notas.append(f"⚠ {sem_classe} chamado(s) sem prioridade mapeada para P1–P4 "
+                     "ficaram fora do SLA.")
+    return notas
 
 
 def tabela_capacidade(cap: dict, frente: str) -> tuple[list, list]:
@@ -1153,10 +1367,11 @@ def texto_outlier_sla(dados: dict) -> Optional[str]:
     return None
 
 
-def texto_premissas() -> str:
+def texto_premissas(cap: dict) -> str:
     p_cfg = CONFIG["premissas_equipe"]
+    origem = "pelo calendário do mês" if cap.get("dias_uteis_automatico") else "informados"
     return (f'Premissas: {p_cfg["analistas"]} analistas; {p_cfg["horas_por_dia"]}h/dia; '
-            f'{p_cfg["dias_uteis_mes"]} dias úteis/mês; desconto de '
+            f'{cap.get("dias_uteis")} dias úteis no mês ({origem}); desconto de '
             f'{p_cfg["dias_ferias_no_mes"]} dias úteis de férias/ausências.')
 
 
@@ -1270,25 +1485,19 @@ def montar_documento(dados: dict, imagens: dict, destino):
     cab, linhas = tabela_projetos(dados["tabela_projetos"])
     adicionar_tabela(doc, cab, linhas, [1.2, 5.0, 2.0, 2.0, 1.7, 1.7, 1.3, 1.9])
 
-    # ===================== 4. SLA por Prioridade =====================
-    adicionar_titulo(doc, f"4. SLA por Prioridade — Frente {F_SUST}")
-    adicionar_paragrafo(
-        doc,
-        "Considera apenas chamados SOLUCIONADOS no período, independente de quando "
-        "foram abertos. Tempos em horas corridas.", italic=True)
-    if dados["sla_sust"].empty:
-        adicionar_nota(doc, f"Sem chamados solucionados na frente {F_SUST} no período.")
-    else:
-        cab, linhas = tabela_sla(dados["sla_sust"])
-        adicionar_tabela(doc, cab, linhas, [3.2, 2.2, 2.6, 3.2, 2, 2.8])
-        adicionar_nota(doc, "Meta SLA provisória (CONFIG['sla_alvo_horas']): ainda não "
-                            "reflete o SLA institucional P1–P4 em dias úteis.")
+    # ===================== 4. SLA Institucional =====================
+    adicionar_titulo(doc, f"4. SLA Institucional — Frente {F_SUST}")
+    adicionar_paragrafo(doc, TEXTO_SLA, italic=True)
+    cab, linhas = tabela_sla(dados["sla_sust"])
+    adicionar_tabela(doc, cab, linhas, [1.4, 3.0, 2.4, 2.0, 1.6, 1.8, 1.8, 2.0])
+    for nota in notas_sla(dados):
+        adicionar_nota(doc, nota)
     if texto_outlier_sla(dados):
         adicionar_nota(doc, texto_outlier_sla(dados))
 
     # ===================== 5. Capacidade =====================
     adicionar_titulo(doc, f"5. Capacidade da Equipe — Frente {F_SUST}")
-    adicionar_paragrafo(doc, texto_premissas(), italic=True)
+    adicionar_paragrafo(doc, texto_premissas(dados["cap_sust"]), italic=True)
     cab, linhas = tabela_capacidade(dados["cap_sust"], F_SUST)
     adicionar_tabela(doc, cab, linhas, [2, 9.5, 3])
     for nota in NOTAS_CAPACIDADE:
@@ -1338,11 +1547,13 @@ def _blocos_do_mes(m: pd.DataFrame, ano: int, mes: int) -> dict:
         outliers_sust=detectar_outliers(m, F_SUST),
         cap_sust=metricas_capacidade(m, F_SUST),
         cap_proj=metricas_capacidade(m, F_PROJ),
+        sla_sust=metricas_sla(m, F_SUST),
     )
     b["registro"] = _metricas_historicas(
         f"{ano:04d}-{mes:02d}", periodo_texto(ano, mes),
         b["painel_sust"], b["painel_proj"], b["cap_sust"], b["cap_proj"],
         _status_breakdown(m), b["outliers_sust"], b["cat_sust_full"], b["cat_proj_full"])
+    b["registro"]["sustentacao"]["sla_pct_no_prazo"] = pct_no_prazo(b["sla_sust"])
     b["registro"]["backlog_inicial_incompleto"] = bool(
         m.attrs.get("backlog_inicial_incompleto", False))
     return b
@@ -1417,7 +1628,7 @@ def calcular_relatorio(m: pd.DataFrame, ano: int, mes: int,
         painel_sust=painel_sust, painel_proj=painel_proj,
         cat_sust=compactar_categorias(cat_sust_full, CONFIG["max_categorias_detalhadas"]),
         cat_proj=compactar_categorias(cat_proj_full, CONFIG["max_categorias_detalhadas"]),
-        sla_sust=metricas_sla_prioridade(m, F_SUST), outliers_sust=outliers_sust,
+        sla_sust=blocos["sla_sust"], outliers_sust=outliers_sust,
         cap_sust=cap_sust, cap_proj=cap_proj,
         tabela_projetos=tabela_frente_secundaria(m, F_PROJ),
         historico_atual=historico_atual, visao_historica=visao,
@@ -1514,6 +1725,7 @@ def _parse_args(argv):
 
 if __name__ == "__main__":
     args = _parse_args(sys.argv[1:])
+    carregar_config()
     if not os.path.exists(args.entrada):
         logger.error("Arquivo não encontrado: %s", args.entrada)
         sys.exit(1)

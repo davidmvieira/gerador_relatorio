@@ -14,7 +14,10 @@
       <h1>{{ dados.periodo_texto if dados else mes_referencia }}</h1>
       <p class="muted">O que está nesta página é exatamente o que vai no documento. Nada é gravado até você baixar ou registrar o mês.</p>
     </div>
-    <a class="link" href="{{ url_for('revisao', id_sessao=sessao, mes_referencia=mes_referencia) }}">← Voltar à revisão</a>
+    <nav class="topbar-links">
+      <a class="link" href="{{ url_for('configuracao', voltar=request.full_path) }}">Configuração</a>
+      <a class="link" href="{{ url_for('revisao', id_sessao=sessao, mes_referencia=mes_referencia) }}">← Voltar à revisão</a>
+    </nav>
   </header>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -122,14 +125,10 @@
     </section>
 
     <section>
-      <h2>4. SLA por Prioridade — Frente {{ dados.F_SUST }}</h2>
-      <p class="note">Considera apenas chamados SOLUCIONADOS no período, independente de quando foram abertos. Tempos em horas corridas.</p>
-      {% if sla %}
-        {% with t = sla %}{% include "_tabela.html" %}{% endwith %}
-        <p class="note">Meta SLA provisória (CONFIG['sla_alvo_horas']): ainda não reflete o SLA institucional P1–P4 em dias úteis.</p>
-      {% else %}
-        <p class="note">Sem chamados solucionados na frente {{ dados.F_SUST }} no período.</p>
-      {% endif %}
+      <h2>4. SLA Institucional — Frente {{ dados.F_SUST }}</h2>
+      <p class="note">{{ textos.sla }}</p>
+      {% with t = sla %}{% include "_tabela.html" %}{% endwith %}
+      {% for nota in textos.notas_sla %}<p class="note{% if nota.startswith('⚠') %} warn{% endif %}">{{ nota }}</p>{% endfor %}
       {% if textos.outlier_sla %}<p class="note">{{ textos.outlier_sla }}</p>{% endif %}
     </section>
 

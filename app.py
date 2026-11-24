@@ -24,6 +24,8 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 sessoes_store.configurar_pasta(os.path.join(app.instance_path, "sessoes"))
 app.config["SESSION_TTL_DAYS"] = int(os.environ.get("GLPI_SESSION_TTL_DAYS", "7"))
 sessoes_store.limpar_sessoes_expiradas(app.config["SESSION_TTL_DAYS"])
+# Configuração local (instance/config.json), editável em /configuracao.
+app.config["CONFIG_ERROS"] = gerador.carregar_config()
 
 # Ponte temporária para sessões existentes durante reload/deploy no mesmo processo.
 SESSOES = globals().get("SESSOES", {})
@@ -601,8 +603,7 @@ def preview(id_sessao):
              "classe": "proj", **_tabela(gerador.tabela_categorias(dados["cat_proj"]))},
         ],
         projetos=_tabela(gerador.tabela_projetos(dados["tabela_projetos"])),
-        sla=(None if dados["sla_sust"].empty
-             else _tabela(gerador.tabela_sla(dados["sla_sust"]))),
+        sla=_tabela(gerador.tabela_sla(dados["sla_sust"])),
         capacidade=_tabela(gerador.tabela_capacidade(dados["cap_sust"], dados["F_SUST"])),
         textos={
             "escopo": gerador.TEXTO_ESCOPO,
@@ -613,7 +614,9 @@ def preview(id_sessao):
             "definicoes_painel": gerador.TEXTO_DEFINICOES_PAINEL,
             "avisos_painel": gerador.avisos_painel(dados),
             "outlier_sla": gerador.texto_outlier_sla(dados),
-            "premissas": gerador.texto_premissas(),
+            "premissas": gerador.texto_premissas(dados["cap_sust"]),
+            "sla": gerador.TEXTO_SLA,
+            "notas_sla": gerador.notas_sla(dados),
             "notas_capacidade": gerador.NOTAS_CAPACIDADE,
             "serie": gerador.TEXTO_SERIE,
             "sem_serie": gerador.TEXTO_SEM_SERIE,
@@ -693,6 +696,77 @@ def registrar_historico(id_sessao):
     flash(f"{mes_referencia} registrado no histórico: passa a ser usado nas "
           "comparações dos próximos meses.", "success")
     return redirect(destino)
+
+
+def _caminho_exibicao(caminho):
+    """Caminho relativo ao projeto quando possível (relpath falha entre discos no Windows)."""
+    try:
+        return os.path.relpath(caminho, os.path.dirname(os.path.abspath(__file__)))
+    except ValueError:
+        return caminho
+
+
+def _config_do_formulario(form):
+    """Converte o formulário da tela de configuração no dicionário de config."""
+    def numero(nome, padrao=None):
+        valor = (form.get(nome) or "").strip().replace(",", ".")
+        return valor if valor else padrao
+
+    return {
+        "titulo_relatorio": form.get("titulo_relatorio", "").strip(),
+        "subtitulo": form.get("subtitulo", "").strip(),
+        "autor": form.get("autor", "").strip(),
+        "entidade_sustentacao": form.get("entidade_sustentacao", "").strip(),
+        "max_categorias_detalhadas": numero("max_categorias_detalhadas", 10),
+        "outlier_iqr_mult_tmr": numero("outlier_iqr_mult_tmr", 8),
+        "premissas_equipe": {
+            "analistas": numero("analistas", 0),
+            "horas_por_dia": numero("horas_por_dia", 0),
+            "dias_uteis_mes": numero("dias_uteis_mes", None),
+            "dias_ferias_no_mes": numero("dias_ferias_no_mes", 0),
+        },
+        "sla": {
+            "mapa_prioridade": {str(p): form.get(f"prioridade_{p}", "")
+                                for p in range(1, 7)},
+            "metas": {classe: {"valor": numero(f"meta_{classe}_valor", 0),
+                               "unidade": form.get(f"meta_{classe}_unidade", "")}
+                      for classe in gerador.CLASSES_SLA},
+        },
+        "calendario": {
+            "feriados_nacionais": form.get("feriados_nacionais") == "on",
+            "feriados_extras": [linha.strip() for linha in
+                                form.get("feriados_extras", "").splitlines()
+                                if linha.strip()],
+        },
+    }
+
+
+@app.route("/configuracao", methods=["GET", "POST"])
+def configuracao():
+    """Edita os parâmetros do relatório (gravados em instance/config.json)."""
+    erros = list(app.config.get("CONFIG_ERROS") or [])
+    valores = gerador.config_editavel()
+    voltar = request.values.get("voltar", "")
+    if not voltar.startswith("/") or voltar.startswith("//"):
+        voltar = ""  # só caminhos internos do próprio app
+    if request.method == "POST":
+        enviado = _config_do_formulario(request.form)
+        erros = gerador.salvar_config(enviado)
+        if not erros:
+            app.config["CONFIG_ERROS"] = []
+            flash("Configuração salva. Os próximos relatórios já usam os novos valores.",
+                  "success")
+            return redirect(voltar or url_for("configuracao"))
+        valores = enviado
+    ano = datetime.now().year
+    feriados = gerador.feriados_configurados([ano]) if not erros else []
+    return render_template(
+        "configuracao.html", cfg=valores, erros=erros, ano=ano, feriados=feriados,
+        mapa={int(k): v for k, v in valores["sla"]["mapa_prioridade"].items()},
+        classes=gerador.CLASSES_SLA, prioridades=PRIORIDADES,
+        voltar=voltar,
+        caminho=_caminho_exibicao(gerador.caminho_config()),
+    )
 
 
 if __name__ == "__main__":

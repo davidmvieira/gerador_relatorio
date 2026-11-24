@@ -257,3 +257,120 @@ def indicadores(m: pd.DataFrame, frente: Optional[str] = None,
         "pct_requisicoes": _pct(req, abertos),
         "pct_incidentes": _pct(inc, abertos),
     }
+
+
+# ---------------------------------------------------------------------------
+# Calendário de dias úteis e SLA institucional (P1–P4)
+# ---------------------------------------------------------------------------
+def _pascoa(ano: int) -> pd.Timestamp:
+    """Domingo de Páscoa (algoritmo de Meeus/Jones/Butcher)."""
+    a, b, c = ano % 19, ano // 100, ano % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l_ = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l_) // 451
+    mes = (h + l_ - 7 * m + 114) // 31
+    dia = (h + l_ - 7 * m + 114) % 31 + 1
+    return pd.Timestamp(year=ano, month=mes, day=dia)
+
+
+def feriados_nacionais(ano: int) -> set:
+    """Feriados nacionais do Brasil (Lei 662/1949 e alterações), sem pontos facultativos."""
+    fixos = ["01-01", "04-21", "05-01", "09-07", "10-12", "11-02", "11-15", "11-20", "12-25"]
+    datas = {pd.Timestamp(f"{ano}-{md}").date() for md in fixos}
+    datas.add((_pascoa(ano) - pd.Timedelta(days=2)).date())  # Sexta-feira Santa
+    return datas
+
+
+def calendario_feriados(anos, extras=(), incluir_nacionais: bool = True) -> list:
+    """Lista ordenada de feriados (datetime.date) para os anos informados."""
+    datas = set()
+    for ano in anos:
+        if incluir_nacionais:
+            datas |= feriados_nacionais(int(ano))
+    for extra in extras:
+        valor = pd.to_datetime(extra, errors="coerce")
+        if pd.notna(valor):
+            datas.add(valor.date())
+    return sorted(datas)
+
+
+def dias_uteis_no_mes(ano: int, mes: int, feriados=()) -> int:
+    inicio, fim = limites_mes(ano, mes)
+    return int(np.busday_count(inicio.date(), fim.date(),
+                               holidays=[np.datetime64(d) for d in feriados]))
+
+
+def prazo_sla(abertura: pd.Series, classe: pd.Series, metas: dict,
+              feriados=()) -> pd.Series:
+    """Prazo de solução de cada chamado.
+
+    ``metas`` = {"P1": {"valor": 4, "unidade": "horas"},
+                 "P3": {"valor": 3, "unidade": "dias_uteis"}, ...}
+    * horas: abertura + N horas corridas (atendimento 24×7);
+    * dias_uteis: fim (23:59:59) do N-ésimo dia útil seguinte à abertura;
+      se aberto em fim de semana/feriado, conta-se a partir do dia útil anterior,
+      ou seja, o 1º dia útil seguinte já é o dia 1.
+    """
+    prazo = pd.Series(pd.NaT, index=abertura.index, dtype="datetime64[ns]")
+    feriados_np = [np.datetime64(d) for d in feriados]
+    for nome, meta in metas.items():
+        alvo = (classe == nome) & abertura.notna()
+        if not alvo.any():
+            continue
+        valor = float(meta["valor"])
+        if meta.get("unidade") == "dias_uteis":
+            dias = abertura[alvo].dt.normalize().values.astype("datetime64[D]")
+            limite = np.busday_offset(dias, int(valor), roll="backward",
+                                      holidays=feriados_np)
+            prazo[alvo] = (pd.to_datetime(limite) + pd.Timedelta(days=1)
+                           - pd.Timedelta(seconds=1))
+        else:
+            prazo[alvo] = abertura[alvo] + pd.to_timedelta(valor, unit="h")
+    return prazo
+
+
+def avaliar_sla(m: pd.DataFrame, mapa_prioridade: dict, metas: dict,
+                feriados=()) -> pd.DataFrame:
+    """Classe (P1–P4), prazo e cumprimento de cada chamado de ``m`` (já marcado).
+
+    Colunas adicionadas: classe_sla, prazo_sla, no_prazo (solucionados no mês),
+    vencido_em_aberto (em aberto no corte e com prazo já estourado).
+    """
+    m = m.copy()
+    prioridade = pd.to_numeric(m["priority"], errors="coerce")
+    m["classe_sla"] = prioridade.map(lambda p: mapa_prioridade.get(int(p))
+                                     if pd.notna(p) else None)
+    m["prazo_sla"] = prazo_sla(_abertura(m), m["classe_sla"], metas, feriados)
+    solucao = m["data_solucao_efetiva"] if "data_solucao_efetiva" in m.columns \
+        else solucao_efetiva(m)
+    m["no_prazo"] = (solucao <= m["prazo_sla"]).where(
+        m["solucionado_no_mes"] & m["prazo_sla"].notna())
+    corte = m.attrs.get("corte", pd.Timestamp.now())
+    m["vencido_em_aberto"] = m["backlog_fim"] & m["prazo_sla"].notna() & (m["prazo_sla"] < corte)
+    return m
+
+
+def resumo_sla(m: pd.DataFrame, metas: dict) -> pd.DataFrame:
+    """Uma linha por classe: solucionados, no prazo, %, mediana e vencidos em aberto."""
+    linhas = []
+    for nome in metas:
+        sub = m[m["classe_sla"] == nome]
+        resolvidos = sub[sub["solucionado_no_mes"]]
+        avaliados = resolvidos["no_prazo"].dropna()
+        no_prazo = int(avaliados.astype(bool).sum())
+        linhas.append({
+            "classe": nome,
+            "solucionados": int(len(resolvidos)),
+            "no_prazo": no_prazo,
+            "pct_no_prazo": round(no_prazo / len(avaliados) * 100, 1) if len(avaliados) else None,
+            "mediana_h": estatisticas_tempo(resolvidos["tempo_resolucao_h"])["mediana_h"],
+            "vencidos_em_aberto": int(sub["vencido_em_aberto"].sum()),
+        })
+    sem_classe = m[m["classe_sla"].isna() & (m["solucionado_no_mes"] | m["backlog_fim"])]
+    resumo = pd.DataFrame(linhas)
+    resumo.attrs["sem_classe"] = int(len(sem_classe))
+    return resumo
