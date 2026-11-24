@@ -1,7 +1,7 @@
 """Interface Flask para revisão e geração de relatórios GLPI.
 
 O estado das sessões é persistido em JSON sob ``instance/sessoes`` por
-``sessoes_store``; o dict legado existe apenas para migração durante reload.
+``sessoes_store``.
 """
 
 import base64
@@ -27,8 +27,6 @@ sessoes_store.limpar_sessoes_expiradas(app.config["SESSION_TTL_DAYS"])
 # Configuração local (instance/config.json), editável em /configuracao.
 app.config["CONFIG_ERROS"] = gerador.carregar_config()
 
-# Ponte temporária para sessões existentes durante reload/deploy no mesmo processo.
-SESSOES = globals().get("SESSOES", {})
 EXTENSOES_PERMITIDAS = {".csv", ".xlsx", ".xlsm"}
 PAGE_SIZE = 20
 
@@ -67,27 +65,6 @@ def _sessao(id_sessao):
         sessao = sessoes_store.carregar_sessao(id_sessao)
     except ValueError:
         return None
-    if sessao is None:
-        legado = SESSOES.get(id_sessao)
-        if not legado:
-            return None
-        df_legado = legado.get("df")
-        if not isinstance(df_legado, pd.DataFrame):
-            return None
-        df_legado = _garantir_campos_livres(df_legado)
-        mes = legado.get("mes_referencia") or _mes_referencia_padrao(df_legado)
-        sessoes_store.salvar_sessao({
-            "id_sessao": id_sessao,
-            "criado_em": datetime.now().isoformat(timespec="seconds"),
-            "nome_arquivo_origem": "sessao-legada",
-            "mes_referencia": mes,
-            "erros": legado.get("erros", []),
-            "avisos": legado.get("avisos", []),
-            "resultado": legado.get("resultado"),
-            "df": df_legado,
-        })
-        SESSOES.pop(id_sessao, None)
-        sessao = sessoes_store.carregar_sessao(id_sessao)
     if sessao is not None:
         sessao["df"] = sessoes_store.df_da_sessao(sessao)
     return sessao
@@ -119,19 +96,6 @@ def _normalizar_mes_referencia(sessao, valor=None):
     if not sessao.get("mes_referencia"):
         sessao["mes_referencia"] = _mes_referencia_padrao(sessao["df"])
     return sessao["mes_referencia"]
-
-
-def _periodo(df, mes_referencia=None):
-    if mes_referencia is None:
-        mes_referencia = _mes_referencia_padrao(df)
-    try:
-        ano, mes = [int(p) for p in mes_referencia.split("-")]
-        texto = gerador.periodo_texto(ano, mes)
-    except (AttributeError, ValueError):
-        ano = datetime.now().year
-        mes = datetime.now().month
-        texto = f"{mes:02d}/{ano}"
-    return {"texto": texto, "ano": ano, "mes": mes, "rotulo": f"{mes:02d}/{ano}"}
 
 
 def _df_com_frente(sessao):
@@ -468,7 +432,6 @@ def salvar_revisao(id_sessao):
                 df.at[indice, "incluir"] = f"incluir_{indice}" in request.form
         atual["erros"], atual["avisos"] = _validar(df)
         atual["df"] = df
-        atual.pop("registros", None)
 
     sessoes_store.atualizar_sessao(id_sessao, aplicar_edicoes)
 
@@ -521,7 +484,6 @@ def bulk_revisao(id_sessao):
         df = _garantir_campos_livres(gerador.preparar_dataframe(df))
         atual["erros"], atual["avisos"] = _validar(df)
         atual["df"] = df
-        atual.pop("registros", None)
 
     sessoes_store.atualizar_sessao(id_sessao, aplicar_acao_em_lote)
     flash("Ação em massa aplicada com sucesso.", "success")
@@ -645,7 +607,6 @@ def gerar(id_sessao):
                     df.at[indice, "incluir"] = f"incluir_{indice}" in request.form
             atual["erros"], atual["avisos"] = _validar(df)
             atual["df"] = df
-            atual.pop("registros", None)
 
         sessao = sessoes_store.atualizar_sessao(id_sessao, salvar_edicoes_para_geracao)
         sessao["df"] = sessoes_store.df_da_sessao(sessao)
