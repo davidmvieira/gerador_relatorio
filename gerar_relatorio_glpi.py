@@ -22,9 +22,11 @@ export) — ver ``metricas.py``, a fonte única dos cálculos:
 import os
 import re
 import sys
+import io
 import json
 import shutil
 import logging
+import threading
 import argparse
 from datetime import datetime
 from calendar import monthrange
@@ -913,11 +915,11 @@ def adicionar_banner(doc, texto, cor_fundo, cor_texto):
     return tabela
 
 
-def adicionar_imagem(doc, caminho, largura_cm):
-    if not os.path.exists(caminho):
-        adicionar_nota(doc, f"[gráfico indisponível: {os.path.basename(caminho)}]")
+def adicionar_imagem(doc, imagem: Optional[bytes], largura_cm):
+    """Insere um PNG em memória (bytes). ``None`` é ignorado (gráfico sem dados)."""
+    if not imagem:
         return
-    doc.add_picture(caminho, width=Cm(largura_cm))
+    doc.add_picture(io.BytesIO(imagem), width=Cm(largura_cm))
     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
@@ -930,7 +932,213 @@ def _descricao_periodo_anterior(atual: str, anterior: str) -> str:
     return f"comparação com {anterior} (lacuna de {distancia - 1} mês(es))"
 
 
-def montar_documento(dados: dict, caminho_saida: str):
+# =============================================================================
+# 6b. TABELAS E TEXTOS COMPARTILHADOS (prévia HTML e .docx usam os mesmos)
+# =============================================================================
+# Cada função devolve (cabeçalhos, linhas) já formatados como texto. A prévia
+# da tela e o documento Word montam suas tabelas a partir daqui, então o que
+# aparece na tela é exatamente o que vai impresso.
+
+def _h(valor) -> str:
+    return f"{valor} h" if valor is not None else "—"
+
+
+def _p(valor) -> str:
+    return f"{valor}%" if valor is not None else "—"
+
+
+def _saldo(valor) -> str:
+    return f"+{valor}" if valor > 0 else str(valor)
+
+
+def tabela_painel(dados: dict) -> tuple[list, list]:
+    pg, pp = dados["painel_sust"], dados["painel_proj"]
+    linhas = [
+        ["Backlog inicial (dia 01)", pg["backlog_inicial"], pp["backlog_inicial"]],
+        ["Abertos no período", pg["novos"], pp["novos"]],
+        ["Solucionados no período", pg["entregues"], pp["entregues"]],
+        ["Saldo (abertos − solucionados)", _saldo(pg["saldo"]), _saldo(pp["saldo"])],
+        ["Backlog final", pg["backlog_final"], pp["backlog_final"]],
+        ["Taxa de absorção", _p(pg["absorcao_pct"]), _p(pp["absorcao_pct"])],
+        ["Tempo de resolução — mediana", _h(pg["tmr_mediana_h"]), _h(pp["tmr_mediana_h"])],
+        ["Tempo de resolução — média", _h(pg["tmr_h"]), _h(pp["tmr_h"])],
+        ["Natureza dos abertos",
+         f'{pg["pct_req"]}% Req / {pg["pct_inc"]}% Inc',
+         f'{pp["pct_req"]}% Req / {pp["pct_inc"]}% Inc'],
+    ]
+    return ["Indicador", dados["F_SUST"], dados["F_PROJ"]], linhas
+
+
+def tabela_comparacao(dados: dict) -> tuple[list, list]:
+    linhas = [[c["indicador"],
+               _fmt_num(c["atual"], c["unidade"]),
+               _fmt_num(c["anterior"], c["unidade"]),
+               _fmt_variacao(c["diferenca"],
+                             " p.p." if c["unidade"] == "%" else c["unidade"]),
+               _fmt_variacao(c["variacao_pct"], "%")]
+              for c in dados["visao_historica"]["comparacoes"]]
+    return ["Indicador", "Atual", "Anterior", "Diferença", "Variação"], linhas
+
+
+def tabela_projecao(dados: dict) -> tuple[list, list]:
+    linhas = [[nome, _fmt_num(valor, unidade)]
+              for nome, (valor, unidade) in dados["visao_historica"]["projecao"].items()]
+    return ["Indicador", "Estimativa"], linhas
+
+
+def tabela_categorias(cat_df: pd.DataFrame) -> tuple[list, list]:
+    linhas = [[idx, int(r["qtd"]), f'{r["pct_qtd"]}%',
+               f'{r["tempo_h"]:.1f}', f'{r["pct_tempo"]}%']
+              for idx, r in cat_df.iterrows()]
+    return ["Categoria", "Qtd.", "% Qtd.", "Tempo Total (h) dos solucionados", "% Tempo"], linhas
+
+
+def tabela_projetos(tab_proj: pd.DataFrame) -> tuple[list, list]:
+    linhas, total_concluido, total_aberto = [], 0.0, 0.0
+    for _, r in tab_proj.iterrows():
+        entregue = str(r.get("origem", "")).strip().lower() == "entregue no mês"
+        if entregue and pd.notna(r["tempo_h"]):
+            horas_txt = f'{r["tempo_h"]:.1f}'
+            total_concluido += float(r["tempo_h"])
+        elif pd.notna(r["horas_acumuladas"]):
+            horas_txt = f'{r["horas_acumuladas"]:.1f} (corrido)'
+            total_aberto += float(r["horas_acumuladas"])
+        else:
+            horas_txt = "—"
+        solucao = r.get("data_solucao_efetiva", r["data_solucao"])
+        linhas.append([
+            int(r["id"]), r["titulo_limpo"], r["origem"], r["status_nome"],
+            r["date"].strftime("%d/%m/%y"),
+            solucao.strftime("%d/%m/%y") if entregue and pd.notna(solucao) else "—",
+            f'{int(r["idade_dias"])}d' if pd.notna(r["idade_dias"]) else "—",
+            horas_txt,
+        ])
+    linhas.append(["", "", "", "", "", "", "TOTAL CONCLUÍDO",
+                   f'{total_concluido:,.1f}'.replace(",", ".")])
+    linhas.append(["", "", "", "", "", "", "TOTAL EM ABERTO (corrido)",
+                   f'{total_aberto:,.1f}'.replace(",", ".")])
+    return ["ID", "Título", "Origem", "Status", "Abertura", "Solução", "Idade", "Horas"], linhas
+
+
+def tabela_sla(sla: pd.DataFrame) -> tuple[list, list]:
+    linhas = [[idx, int(r["count"]), f'{r["mean"]:.1f} h',
+               f'{r["min"]:.1f} h – {r["max"]:.1f} h',
+               _fmt_num(r["meta_h"], " h"), f'{r["pct_dentro_sla"]}%']
+              for idx, r in sla.iterrows()]
+    return ["Prioridade", "Solucionados", "Tempo Médio", "Faixa (mín–máx)",
+            "Meta SLA", "% Dentro do SLA"], linhas
+
+
+def tabela_capacidade(cap: dict, frente: str) -> tuple[list, list]:
+    return ["Sigla", "Descrição / Fórmula", "Valor"], [
+        ["HMM", "Horas totais projetadas", f'{cap["hmm"]} h'],
+        ["HE", "Horas efetivas (descontando ausências)", f'{cap["he"]} h'],
+        ["HPC", f"Tempo registrado nos SOLUCIONADOS do mês ({frente})", f'{cap["hpc"]} h'],
+        ["HHA", "Horas úteis alocadas (HPC ÷ horas/dia)", f'{cap["hha"]} h'],
+        ["AD%", "Aderência (HHA ÷ HE)", f'{cap["ad_pct"]}%'],
+    ]
+
+
+TEXTO_ESCOPO = [
+    "Chamados EM ABERTO no dia 01 (backlog inicial), mesmo que abertos em meses anteriores;",
+    "Chamados ABERTOS dentro do período.",
+]
+
+TEXTO_LEITURA_PAINEL = (
+    "Leitura: Backlog inicial é o que estava em aberto no dia 01; Abertos são "
+    "as novas demandas do mês; Solucionados são os concluídos no mês (mesmo que "
+    "abertos antes); Backlog final é o que permanece em aberto no último dia. "
+    "Saldo = Abertos − Solucionados (positivo: a fila cresceu).")
+
+TEXTO_DEFINICOES_PAINEL = (
+    "Taxa de absorção = solucionados ÷ (backlog inicial + abertos): quanto da "
+    "carga do mês foi resolvida; nunca passa de 100%. Tempos em horas CORRIDAS "
+    "(abertura → solução, incluindo noites e fins de semana). A mediana mostra "
+    "o caso típico; a média é puxada por chamados muito longos.")
+
+
+def texto_escopo_nota(dados: dict) -> str:
+    return ("Todos os números são reconstruídos pelas datas de abertura e solução, "
+            "e não pelo status atual do chamado: o mesmo arquivo gera sempre os mesmos "
+            "números para o mesmo mês, e chamados abertos depois do período não entram. "
+            f'As frentes {dados["F_SUST"]} e {dados["F_PROJ"]} são apresentadas '
+            "separadamente e nunca somadas em taxas ou médias.")
+
+
+def avisos_painel(dados: dict) -> list:
+    """Avisos que mudam a leitura dos números do mês (mostrados na tela e no .docx)."""
+    avisos = []
+    if dados.get("mes_parcial") and dados.get("corte") is not None:
+        avisos.append(
+            f'⚠ Mês em andamento: dados considerados até '
+            f'{pd.Timestamp(dados["corte"]).strftime("%d/%m/%Y %H:%M")}. '
+            "O backlog final é o desse momento, não o do último dia do mês.")
+    if dados.get("backlog_inicial_incompleto"):
+        avisos.append(
+            "⚠ A planilha não contém chamados abertos antes deste mês: o backlog "
+            "inicial reflete apenas o que está no export e pode estar subestimado. "
+            "Para um valor fiel, exporte também os chamados abertos em meses "
+            "anteriores que ainda estavam pendentes no dia 01.")
+    pg = dados["painel_sust"]
+    if pg["n_outliers"]:
+        avisos.append(
+            f'{dados["F_SUST"]}: {pg["n_outliers"]} chamado(s) acima de '
+            f'{pg["limite_outlier_h"]} h (Q3 + {CONFIG["outlier_iqr_mult_tmr"]:g}·IQR). '
+            f'Sem eles, a média seria {_h(pg["tmr_media_sem_outliers_h"])}.')
+    return avisos
+
+
+def texto_historico_atual(dados: dict) -> str:
+    atual = dados["historico_atual"]
+    return (f'{dados["F_SUST"]} em {atual["periodo"]}: '
+            f'{atual["sustentacao"]["novos"]} abertos, '
+            f'{atual["sustentacao"]["entregues"]} solucionados, '
+            f'backlog final de {atual["sustentacao"]["backlog_final"]}.')
+
+
+def texto_historico_ignorado(dados: dict) -> Optional[str]:
+    if not dados.get("historico_ignorado"):
+        return None
+    return ("Meses fora da comparação por terem sido calculados com a regra "
+            f'anterior: {", ".join(dados["historico_ignorado"])}. Registre-os novamente '
+            "a partir do export para incluí-los.")
+
+
+def texto_outlier_sla(dados: dict) -> Optional[str]:
+    outliers = dados["outliers_sust"]
+    if len(outliers["critico"]):
+        top = outliers["critico"].iloc[0]
+        return (f'Outlier crítico (Q3 + 3·IQR = {outliers["limite_critico"]} h): '
+                f'chamado {int(top["id"])} ({top["categoria_final"]}), '
+                f'{top["tempo_h"]:.1f} h — considere tratá-lo à parte.')
+    if len(outliers["atencao"]):
+        return (f'{len(outliers["atencao"])} chamado(s) acima do limiar de atenção '
+                f'(Q3 + 1.5·IQR = {outliers["limite_atencao"]} h).')
+    return None
+
+
+def texto_premissas() -> str:
+    p_cfg = CONFIG["premissas_equipe"]
+    return (f'Premissas: {p_cfg["analistas"]} analistas; {p_cfg["horas_por_dia"]}h/dia; '
+            f'{p_cfg["dias_uteis_mes"]} dias úteis/mês; desconto de '
+            f'{p_cfg["dias_ferias_no_mes"]} dias úteis de férias/ausências.')
+
+
+NOTAS_CAPACIDADE = [
+    "⚠ O HPC soma tempo CORRIDO (inclui noites e fins de semana), não "
+    "esforço registrado. A Aderência é indicativa e não deve ser lida "
+    "como ocupação real da equipe.",
+    "Limitação conhecida: sem log de atividade do GLPI, todo o tempo "
+    "de um chamado herdado é atribuído ao mês de solução. O HPC fica "
+    "superestimado em meses com muitas entregas de chamados antigos.",
+]
+
+
+# =============================================================================
+# 6c. MONTAGEM DO .DOCX (em memória)
+# =============================================================================
+def montar_documento(dados: dict, imagens: dict, destino):
+    """Monta o .docx. ``destino`` pode ser um caminho ou um arquivo em memória."""
     doc = Document()
     section = doc.sections[0]
     section.page_width, section.page_height = Cm(21), Cm(29.7)
@@ -954,261 +1162,112 @@ def montar_documento(dados: dict, caminho_saida: str):
     p.runs[0].font.size = Pt(9); p.runs[0].font.color.rgb = RGBColor(0x59, 0x59, 0x59)
     doc.add_paragraph()
 
-    F_SUST = CONFIG["nome_frente_sustentacao"]
-    F_PROJ = CONFIG["nome_frente_projetos"]
+    F_SUST, F_PROJ = dados["F_SUST"], dados["F_PROJ"]
     visao = dados["visao_historica"]
-    atual = dados["historico_atual"]
 
     # ===================== Escopo do Período =====================
     adicionar_titulo(doc, "Escopo do Período")
     adicionar_paragrafo(
-        doc,
-        f'Este relatório considera todo chamado que passou por {dados["periodo_texto"]}:'
-    )
-    for b in [
-        "Chamados EM ABERTO no dia 01 (backlog inicial), mesmo que abertos em meses anteriores;",
-        "Chamados ABERTOS dentro do período.",
-    ]:
+        doc, f'Este relatório considera todo chamado que passou por {dados["periodo_texto"]}:')
+    for b in TEXTO_ESCOPO:
         adicionar_bullet(doc, b)
-    adicionar_nota(
-        doc,
-        "Todos os números são reconstruídos pelas datas de abertura e solução, "
-        "e não pelo status atual do chamado: o mesmo arquivo gera sempre os mesmos "
-        "números para o mesmo mês, e chamados abertos depois do período não entram. "
-        f"As frentes {F_SUST} e {F_PROJ} são apresentadas separadamente e nunca "
-        "somadas em taxas ou médias.")
+    adicionar_nota(doc, texto_escopo_nota(dados))
 
     # ===================== Visão Histórica =====================
     adicionar_titulo(doc, "Visão Histórica")
-    adicionar_paragrafo(
-        doc,
-        f'{F_SUST} em {atual["periodo"]}: '
-        f'{atual["sustentacao"]["novos"]} abertos, '
-        f'{atual["sustentacao"]["entregues"]} solucionados, '
-        f'backlog final de {atual["sustentacao"]["backlog_final"]}.')
-    if dados.get("historico_ignorado"):
-        adicionar_nota(
-            doc, "Meses fora da comparação por terem sido calculados com a regra "
-                 f'anterior: {", ".join(dados["historico_ignorado"])}. Gere-os novamente '
-                 "a partir do export para incluí-los.")
+    adicionar_paragrafo(doc, texto_historico_atual(dados))
+    if texto_historico_ignorado(dados):
+        adicionar_nota(doc, texto_historico_ignorado(dados))
     if visao["anterior"]:
         adicionar_paragrafo(
             doc,
-            _descricao_periodo_anterior(atual["periodo"], visao["anterior"]["periodo"])
+            _descricao_periodo_anterior(dados["mes_referencia"], visao["anterior"]["periodo"])
             + ". Os valores não são classificados como favoráveis ou desfavoráveis.",
             italic=True)
-        rows = [[c["indicador"],
-                 _fmt_num(c["atual"], c["unidade"]),
-                 _fmt_num(c["anterior"], c["unidade"]),
-                 _fmt_variacao(c["diferenca"],
-                               " p.p." if c["unidade"] == "%" else c["unidade"]),
-                 _fmt_variacao(c["variacao_pct"], "%")]
-                for c in visao["comparacoes"]]
-        adicionar_tabela(doc, ["Indicador", "Atual", "Anterior", "Diferença", "Variação"],
-                         rows, [4.8, 2.6, 2.6, 2.9, 2.9])
+        cab, linhas = tabela_comparacao(dados)
+        adicionar_tabela(doc, cab, linhas, [4.8, 2.6, 2.6, 2.9, 2.9])
     else:
-        adicionar_nota(doc, "Sem período anterior para comparação.")
+        adicionar_nota(doc, "Sem período anterior registrado para comparação.")
 
     if visao["projecao"]:
         adicionar_titulo(doc, "Projeção do Próximo Mês", nivel=2)
         adicionar_paragrafo(
             doc, "ESTIMATIVA via média móvel simples dos 3 últimos meses. "
                  "Não é uma previsão garantida.", italic=True)
-        rows = [[nome, _fmt_num(valor, unidade)]
-                for nome, (valor, unidade) in visao["projecao"].items()]
-        adicionar_tabela(doc, ["Indicador", "Estimativa"], rows, [8, 5])
+        cab, linhas = tabela_projecao(dados)
+        adicionar_tabela(doc, cab, linhas, [8, 5])
 
     # ===================== 1. Painel Geral (fluxo) =====================
     adicionar_titulo(doc, "1. Painel Geral — Fluxo do Período")
-    adicionar_paragrafo(
-        doc,
-        "Leitura: Backlog inicial é o que estava em aberto no dia 01; Abertos são "
-        "as novas demandas do mês; Solucionados são os concluídos no mês (mesmo que "
-        "abertos antes); Backlog final é o que permanece em aberto no último dia. "
-        "Saldo = Abertos − Solucionados (positivo: a fila cresceu).")
-    pg, pp = dados["painel_sust"], dados["painel_proj"]
-
-    def _h(valor):
-        return f"{valor} h" if valor is not None else "—"
-
-    def _p(valor):
-        return f"{valor}%" if valor is not None else "—"
-
-    def _saldo(valor):
-        return f"+{valor}" if valor > 0 else str(valor)
-
-    adicionar_tabela(
-        doc, ["Indicador", F_SUST, F_PROJ],
-        [
-            ["Backlog inicial (dia 01)", pg["backlog_inicial"], pp["backlog_inicial"]],
-            ["Abertos no período", pg["novos"], pp["novos"]],
-            ["Solucionados no período", pg["entregues"], pp["entregues"]],
-            ["Saldo (abertos − solucionados)", _saldo(pg["saldo"]), _saldo(pp["saldo"])],
-            ["Backlog final", pg["backlog_final"], pp["backlog_final"]],
-            ["Taxa de absorção", _p(pg["absorcao_pct"]), _p(pp["absorcao_pct"])],
-            ["Tempo de resolução — mediana", _h(pg["tmr_mediana_h"]), _h(pp["tmr_mediana_h"])],
-            ["Tempo de resolução — média", _h(pg["tmr_h"]), _h(pp["tmr_h"])],
-            ["Natureza dos abertos",
-             f'{pg["pct_req"]}% Req / {pg["pct_inc"]}% Inc',
-             f'{pp["pct_req"]}% Req / {pp["pct_inc"]}% Inc'],
-        ],
-        [6.2, 4.6, 4.6])
-    adicionar_nota(
-        doc,
-        "Taxa de absorção = solucionados ÷ (backlog inicial + abertos): quanto da "
-        "carga do mês foi resolvida; nunca passa de 100%. Tempos em horas CORRIDAS "
-        "(abertura → solução, incluindo noites e fins de semana). A mediana mostra "
-        "o caso típico; a média é puxada por chamados muito longos.")
-    if dados.get("backlog_inicial_incompleto"):
-        adicionar_nota(
-            doc,
-            "⚠ A planilha não contém chamados abertos antes deste mês: o backlog "
-            "inicial reflete apenas o que está no export e pode estar subestimado. "
-            "Para um valor fiel, exporte também os chamados abertos em meses "
-            "anteriores que ainda estavam pendentes no dia 01.")
-    if pg["n_outliers"]:
-        adicionar_nota(
-            doc,
-            f'{F_SUST}: {pg["n_outliers"]} chamado(s) acima de {pg["limite_outlier_h"]} h '
-            f'(Q3 + {CONFIG["outlier_iqr_mult_tmr"]:g}·IQR). Sem eles, a média seria '
-            f'{_h(pg["tmr_media_sem_outliers_h"])}.')
+    adicionar_paragrafo(doc, TEXTO_LEITURA_PAINEL)
+    cab, linhas = tabela_painel(dados)
+    adicionar_tabela(doc, cab, linhas, [6.2, 4.6, 4.6])
+    adicionar_nota(doc, TEXTO_DEFINICOES_PAINEL)
+    for aviso in avisos_painel(dados):
+        adicionar_nota(doc, aviso)
     doc.add_paragraph()
-    adicionar_imagem(doc, dados["img_donut"], 9)
+    adicionar_imagem(doc, imagens.get("donut"), 9)
     adicionar_nota(doc, f"Natureza dos chamados abertos no período — frente {F_SUST}.")
 
     # ===================== 2. Categorias =====================
     adicionar_titulo(doc, "2. Distribuição por Categoria (base relevante)")
-    for frente, palette in ((F_SUST, "navy"), (F_PROJ, "orange")):
+    for frente, palette, chave_painel, chave_cat in (
+            (F_SUST, "navy", "painel_sust", "cat_sust"),
+            (F_PROJ, "orange", "painel_proj", "cat_proj")):
         bg = COR["banner_blue_bg"] if palette == "navy" else COR["banner_orange_bg"]
         tx = COR["navy_rgb"] if palette == "navy" else COR["orange_rgb"]
-        total_frente = dados["painel_sust"]["total_relevante"] if frente == F_SUST \
-            else dados["painel_proj"]["total_relevante"]
-        adicionar_banner(doc, f"FRENTE {frente.upper()} — {total_frente} chamados relevantes",
-                         bg, tx)
-        cat_df = dados["cat_sust"] if frente == F_SUST else dados["cat_proj"]
-        rows = [[idx, int(r["qtd"]), f'{r["pct_qtd"]}%',
-                 f'{r["tempo_h"]:.1f}', f'{r["pct_tempo"]}%']
-                for idx, r in cat_df.iterrows()]
-        adicionar_tabela(doc, ["Categoria", "Qtd.", "% Qtd.",
-                               "Tempo Total (h) dos entregues", "% Tempo"],
-                         rows, [5.8, 2, 2.2, 3.5, 2.5])
+        adicionar_banner(
+            doc, f'FRENTE {frente.upper()} — {dados[chave_painel]["total_relevante"]} '
+                 'chamados no mês', bg, tx)
+        cab, linhas = tabela_categorias(dados[chave_cat])
+        adicionar_tabela(doc, cab, linhas, [5.8, 2, 2.2, 3.5, 2.5])
         doc.add_paragraph()
-    adicionar_imagem(doc, dados["img_barras_sust"], 14)
+    adicionar_imagem(doc, imagens.get("barras_sust"), 14)
 
     # ===================== 3. Projetos =====================
     adicionar_titulo(doc, f"3. Frente {F_PROJ} — Detalhamento Completo")
     adicionar_paragrafo(
         doc,
-        f'Lista todos os chamados de {F_PROJ} relevantes para o período: '
-        f'novos no mês, entregues no mês (mesmo se abertos antes) e ainda em '
-        f'andamento. Projetos longos permanecem visíveis enquanto ativos.',
+        f'Lista todos os chamados de {F_PROJ} do período: em aberto no dia 01 ou '
+        f'abertos no mês. Projetos longos permanecem visíveis enquanto ativos.',
         italic=True)
-    tab_proj = dados["tabela_projetos"]
-    rows, total_concluido, total_aberto = [], 0.0, 0.0
-    for _, r in tab_proj.iterrows():
-        origem = str(r.get("origem", "")).strip().lower()
-        eh_entregue_no_mes = origem == "entregue no mês"
+    cab, linhas = tabela_projetos(dados["tabela_projetos"])
+    adicionar_tabela(doc, cab, linhas, [1.2, 5.0, 2.0, 2.0, 1.7, 1.7, 1.3, 1.9])
 
-        if pd.notna(r["tempo_h"]) and eh_entregue_no_mes:
-            horas_txt = f'{r["tempo_h"]:.1f}'
-            total_concluido += float(r["tempo_h"])
-        elif pd.notna(r["horas_acumuladas"]):
-            horas_txt = f'{r["horas_acumuladas"]:.1f} (corrido)'
-            total_aberto += float(r["horas_acumuladas"])
-        else:
-            horas_txt = "—"
-        rows.append([
-            int(r["id"]), r["titulo_limpo"], r["origem"], r["status_nome"],
-            r["date"].strftime("%d/%m/%y"),
-            r["data_solucao"].strftime("%d/%m/%y") if pd.notna(r["data_solucao"]) else "—",
-            f'{int(r["idade_dias"])}d',
-            horas_txt,
-        ])
-    rows.append(["", "", "", "", "", "", "TOTAL CONCLUÍDO",
-                 f'{total_concluido:,.1f}'.replace(",", ".")])
-    rows.append(["", "", "", "", "", "", "TOTAL EM ABERTO (corrido)",
-                 f'{total_aberto:,.1f}'.replace(",", ".")])
-    adicionar_tabela(doc, ["ID", "Título", "Origem", "Status", "Abertura",
-                           "Solução", "Idade", "Horas"],
-                     rows, [1.2, 5.0, 2.0, 2.0, 1.7, 1.7, 1.3, 1.9])
-
-    # ===================== 4. SLA por Prioridade (só tabela) =====================
+    # ===================== 4. SLA por Prioridade =====================
     adicionar_titulo(doc, f"4. SLA por Prioridade — Frente {F_SUST}")
     adicionar_paragrafo(
         doc,
         "Considera apenas chamados SOLUCIONADOS no período, independente de quando "
         "foram abertos. Tempos em horas corridas.", italic=True)
-    sla = dados["sla_sust"]
-    if sla.empty:
-        adicionar_nota(doc, "Sem chamados entregues na frente Sustentação no período.")
+    if dados["sla_sust"].empty:
+        adicionar_nota(doc, f"Sem chamados solucionados na frente {F_SUST} no período.")
     else:
-        rows = [[idx, int(r["count"]), f'{r["mean"]:.1f} h',
-                 f'{r["min"]:.1f} h – {r["max"]:.1f} h',
-                 _fmt_num(r["meta_h"], " h"), f'{r["pct_dentro_sla"]}%']
-                for idx, r in sla.iterrows()]
-        adicionar_tabela(
-            doc,
-            ["Prioridade", "Entregues", "Tempo Médio", "Faixa (mín–máx)",
-             "Meta SLA", "% Dentro do SLA"],
-            rows, [3.2, 2.2, 2.6, 3.2, 2, 2.8])
+        cab, linhas = tabela_sla(dados["sla_sust"])
+        adicionar_tabela(doc, cab, linhas, [3.2, 2.2, 2.6, 3.2, 2, 2.8])
         adicionar_nota(doc, "Meta SLA provisória (CONFIG['sla_alvo_horas']): ainda não "
                             "reflete o SLA institucional P1–P4 em dias úteis.")
+    if texto_outlier_sla(dados):
+        adicionar_nota(doc, texto_outlier_sla(dados))
 
-    outliers = dados["outliers_sust"]
-    if len(outliers["critico"]):
-        top = outliers["critico"].iloc[0]
-        adicionar_nota(
-            doc, f'Outlier crítico (Q3 + 3·IQR = {outliers["limite_critico"]} h): '
-                 f'chamado {int(top["id"])} ({top["categoria_final"]}), '
-                 f'{top["tempo_h"]:.1f} h — considere tratá-lo à parte.')
-    elif len(outliers["atencao"]):
-        adicionar_nota(
-            doc, f'{len(outliers["atencao"])} chamado(s) acima do limiar de atenção '
-                 f'(Q3 + 1.5·IQR = {outliers["limite_atencao"]} h).')
-
-    # ===================== 5. Capacidade (só tabela) =====================
+    # ===================== 5. Capacidade =====================
     adicionar_titulo(doc, f"5. Capacidade da Equipe — Frente {F_SUST}")
-    p_cfg = CONFIG["premissas_equipe"]
-    adicionar_paragrafo(
-        doc,
-        f'Premissas: {p_cfg["analistas"]} analistas; {p_cfg["horas_por_dia"]}h/dia; '
-        f'{p_cfg["dias_uteis_mes"]} dias úteis/mês; desconto de '
-        f'{p_cfg["dias_ferias_no_mes"]} dias úteis de férias/ausências.',
-        italic=True)
-    cap = dados["cap_sust"]
-    adicionar_tabela(
-        doc, ["Sigla", "Descrição / Fórmula", "Valor"],
-        [
-            ["HMM", "Horas totais projetadas", f'{cap["hmm"]} h'],
-            ["HE", "Horas efetivas (descontando ausências)", f'{cap["he"]} h'],
-            ["HPC", f"Tempo registrado nos ENTREGUES do mês ({F_SUST})", f'{cap["hpc"]} h'],
-            ["HHA", "Horas úteis alocadas (HPC ÷ horas/dia)", f'{cap["hha"]} h'],
-            ["AD%", "Aderência (HHA ÷ HE)", f'{cap["ad_pct"]}%'],
-        ],
-        [2, 9.5, 3])
-    adicionar_nota(
-        doc, "⚠ O HPC soma tempo CORRIDO (inclui noites e fins de semana), não "
-             "esforço registrado. A Aderência é indicativa e não deve ser lida "
-             "como ocupação real da equipe.")
-    adicionar_nota(
-        doc, "Limitação conhecida: sem log de atividade do GLPI, todo o tempo "
-             "de um chamado herdado é atribuído ao mês de solução. O HPC fica "
-             "superestimado em meses com muitas entregas de chamados antigos.")
+    adicionar_paragrafo(doc, texto_premissas(), italic=True)
+    cab, linhas = tabela_capacidade(dados["cap_sust"], F_SUST)
+    adicionar_tabela(doc, cab, linhas, [2, 9.5, 3])
+    for nota in NOTAS_CAPACIDADE:
+        adicionar_nota(doc, nota)
 
     # ===================== 6. Série Histórica =====================
     adicionar_titulo(doc, "6. Série Histórica Gerencial")
-    serie = visao["serie"]
-    if len(serie) < 2:
-        adicionar_nota(doc, "A série histórica aparecerá quando houver ≥ 2 meses consolidados.")
+    if len(visao["serie"]) < 2:
+        adicionar_nota(doc, "A série histórica aparecerá quando houver ≥ 2 meses registrados.")
     else:
         adicionar_paragrafo(
-            doc, f"Série da frente {F_SUST} consolidada a partir dos JSONs mensais "
-                 "calculados com a mesma regra. O mês corrente é reprocessado a cada "
-                 "execução.", italic=True)
-        adicionar_imagem(doc, dados["img_hist_fluxo"], 15)
-        adicionar_imagem(doc, dados["img_hist_backlog_frente"], 15)
-        adicionar_imagem(doc, dados["img_hist_tmr"], 15)
-        adicionar_imagem(doc, dados["img_hist_taxa"], 15)
+            doc, f"Série da frente {F_SUST} a partir dos meses registrados no histórico "
+                 "com a mesma regra de cálculo, mais o mês deste relatório.", italic=True)
+        for chave in ("hist_fluxo", "hist_backlog_frente", "hist_tmr", "hist_taxa"):
+            adicionar_imagem(doc, imagens.get(chave), 15)
 
     # ===================== 7. Observações =====================
     adicionar_titulo(doc, "7. Observações e Plano de Ação")
@@ -1217,107 +1276,124 @@ def montar_documento(dados: dict, caminho_saida: str):
     for item in ["Ação 1: ", "Ação 2: ", "Ação 3: "]:
         adicionar_bullet(doc, item)
 
-    doc.save(caminho_saida)
+    doc.save(destino)
 
 
 # =============================================================================
 # 7. ORQUESTRAÇÃO
 # =============================================================================
-def gerar_relatorio_dataframe(m: pd.DataFrame, ano: int, mes: int):
-    colunas_periodo = {"novo_no_mes", "entregue_no_mes"}
-    faltantes = colunas_periodo - set(m.columns)
-    if faltantes:
-        raise ValueError(
-            "DataFrame sem flags do período: "
-            f"{', '.join(sorted(faltantes))}. Execute "
-            "filtrar_periodo_referencia() antes de gerar o relatório."
-        )
-    if m.empty:
-        raise ValueError(
-            f"Nenhum chamado relevante para {ano:04d}-{mes:02d}; "
-            "o relatório não foi iniciado."
-        )
+_LOCK_GRAFICOS = threading.Lock()  # pyplot não é thread-safe (Flask atende em threads)
 
-    pasta = _nova_pasta_execucao()
-    logger.info("[1/5] Preparando dados do período %04d-%02d ...", ano, mes)
-    txt_periodo = periodo_texto(ano, mes)
+
+def calcular_relatorio(m: pd.DataFrame, ano: int, mes: int,
+                       historico: Optional[tuple] = None) -> dict:
+    """Calcula TUDO o que o relatório mostra, sem gravar nada em disco.
+
+    ``m`` é o resultado de ``filtrar_periodo_referencia``. ``historico`` é o
+    par (registros, ignorados) de ``carregar_historico``; se omitido, o
+    histórico é LIDO (nunca gravado) da pasta configurada.
+    """
+    if {"novo_no_mes", "entregue_no_mes"} - set(m.columns):
+        raise ValueError("DataFrame sem flags do período. Execute "
+                         "filtrar_periodo_referencia() antes de calcular o relatório.")
+    if m.empty:
+        raise ValueError(f"Nenhum chamado relevante para {ano:04d}-{mes:02d}.")
+
     F_SUST = CONFIG["nome_frente_sustentacao"]
     F_PROJ = CONFIG["nome_frente_projetos"]
+    periodo = f"{ano:04d}-{mes:02d}"
+    txt_periodo = periodo_texto(ano, mes)
 
-    logger.info("[2/5] Calculando métricas ...")
     painel_sust = metricas_painel(m, F_SUST)
     painel_proj = metricas_painel(m, F_PROJ)
-
     cat_sust_full = metricas_categoria(m, F_SUST)
     cat_proj_full = metricas_categoria(m, F_PROJ)
-    cat_sust = compactar_categorias(cat_sust_full, CONFIG["max_categorias_detalhadas"])
-    cat_proj = compactar_categorias(cat_proj_full, CONFIG["max_categorias_detalhadas"])
-
-    sla_sust = metricas_sla_prioridade(m, F_SUST)
     outliers_sust = detectar_outliers(m, F_SUST)
     cap_sust = metricas_capacidade(m, F_SUST)
     cap_proj = metricas_capacidade(m, F_PROJ)
-    status_total = _status_breakdown(m)
-    tabela_projetos = tabela_frente_secundaria(m, F_PROJ)
 
-    periodo = f"{ano:04d}-{mes:02d}"
     historico_atual = _metricas_historicas(
         periodo, txt_periodo, painel_sust, painel_proj,
-        cap_sust, cap_proj, status_total, outliers_sust,
+        cap_sust, cap_proj, _status_breakdown(m), outliers_sust,
         cat_sust_full, cat_proj_full)
-    historico_carregado, historico_ignorado = carregar_historico()
-    historico_anterior = [r for r in historico_carregado
-                          if r.get("periodo") != periodo]
-    historico_ignorado = [p for p in historico_ignorado if p != periodo]
-    visao = preparar_visao_historica(historico_anterior, historico_atual)
+    registros, ignorados = historico if historico is not None else carregar_historico()
+    anteriores = [r for r in registros if r.get("periodo") != periodo]
+    visao = preparar_visao_historica(anteriores, historico_atual)
 
-    logger.info("[3/5] Gerando gráficos ...")
-    img_donut = os.path.join(pasta, "01_donut_natureza.png")
-    img_barras_sust = os.path.join(pasta, "02_barras_categoria_sustentacao.png")
-    img_hist_fluxo = os.path.join(pasta, "06_hist_fluxo.png")
-    img_hist_backlog_frente = os.path.join(pasta, "07_hist_backlog_frente.png")
-    img_hist_tmr = os.path.join(pasta, "08_hist_tmr.png")
-    img_hist_taxa = os.path.join(pasta, "09_hist_taxa.png")
-
-    grafico_donut_natureza(painel_sust, img_donut)
-    grafico_barras_categoria(
-        cat_sust,
-        f"{F_SUST} — Volume por Categoria ({painel_sust['total_relevante']} chamados)",
-        img_barras_sust)
-
-    if len(visao["serie"]) >= 2:
-        grafico_fluxo_historico(visao["serie"], img_hist_fluxo)
-        grafico_backlog_frente(visao["serie"], img_hist_backlog_frente)
-        grafico_evolucao_historica(
-            visao["serie"], "sustentacao", "tmr_mediana_h",
-            "Sustentação — Mediana do Tempo de Resolução (horas corridas)",
-            img_hist_tmr, "h", cor_nome="navy")
-        grafico_evolucao_historica(
-            visao["serie"], "sustentacao", "taxa_resolucao",
-            "Sustentação — Taxa de Absorção",
-            img_hist_taxa, "%", cor_nome="green")
-
-    logger.info("[4/5] Montando .docx ...")
-    dados = dict(
-        periodo_texto=txt_periodo,
+    corte, fim = m.attrs.get("corte"), m.attrs.get("periodo_fim")
+    return dict(
+        F_SUST=F_SUST, F_PROJ=F_PROJ,
+        mes_referencia=periodo, periodo_texto=txt_periodo,
         painel_sust=painel_sust, painel_proj=painel_proj,
-        cat_sust=cat_sust, cat_proj=cat_proj,
-        sla_sust=sla_sust, outliers_sust=outliers_sust,
+        cat_sust=compactar_categorias(cat_sust_full, CONFIG["max_categorias_detalhadas"]),
+        cat_proj=compactar_categorias(cat_proj_full, CONFIG["max_categorias_detalhadas"]),
+        sla_sust=metricas_sla_prioridade(m, F_SUST), outliers_sust=outliers_sust,
         cap_sust=cap_sust, cap_proj=cap_proj,
-        tabela_projetos=tabela_projetos,
+        tabela_projetos=tabela_frente_secundaria(m, F_PROJ),
         historico_atual=historico_atual, visao_historica=visao,
-        historico_ignorado=historico_ignorado,
+        historico_ignorado=[p for p in ignorados if p != periodo],
         backlog_inicial_incompleto=m.attrs.get("backlog_inicial_incompleto", False),
-        img_donut=img_donut, img_barras_sust=img_barras_sust,
-        img_hist_fluxo=img_hist_fluxo,
-        img_hist_backlog_frente=img_hist_backlog_frente,
-        img_hist_tmr=img_hist_tmr, img_hist_taxa=img_hist_taxa,
+        mes_parcial=bool(corte is not None and fim is not None and corte < fim),
+        corte=corte,
     )
-    caminho_docx = os.path.join(pasta, CONFIG["nome_docx"])
-    montar_documento(dados, caminho_docx)
-    salvar_historico(historico_atual)
 
-    logger.info("[5/5] Relatório salvo em: %s", caminho_docx)
+
+def _png(desenhar) -> Optional[bytes]:
+    """Executa uma função de gráfico apontando para um buffer em memória."""
+    buffer = io.BytesIO()
+    desenhar(buffer)
+    plt.close("all")
+    return buffer.getvalue() or None
+
+
+def gerar_graficos(dados: dict) -> dict:
+    """Gera os PNGs do relatório em memória: {nome: bytes | None}."""
+    F_SUST = dados["F_SUST"]
+    serie = dados["visao_historica"]["serie"]
+    with _LOCK_GRAFICOS:
+        imagens = {
+            "donut": _png(lambda b: grafico_donut_natureza(dados["painel_sust"], b)),
+            "barras_sust": _png(lambda b: grafico_barras_categoria(
+                dados["cat_sust"],
+                f"{F_SUST} — Volume por Categoria "
+                f"({dados['painel_sust']['total_relevante']} chamados)", b)),
+        }
+        if len(serie) >= 2:
+            imagens.update({
+                "hist_fluxo": _png(lambda b: grafico_fluxo_historico(serie, b)),
+                "hist_backlog_frente": _png(lambda b: grafico_backlog_frente(serie, b)),
+                "hist_tmr": _png(lambda b: grafico_evolucao_historica(
+                    serie, "sustentacao", "tmr_mediana_h",
+                    "Sustentação — Mediana do Tempo de Resolução (horas corridas)",
+                    b, "h", cor_nome="navy")),
+                "hist_taxa": _png(lambda b: grafico_evolucao_historica(
+                    serie, "sustentacao", "taxa_resolucao",
+                    "Sustentação — Taxa de Absorção", b, "%", cor_nome="green")),
+            })
+    return imagens
+
+
+def gerar_docx_bytes(dados: dict, imagens: Optional[dict] = None) -> bytes:
+    """Devolve o .docx pronto em memória (nada é gravado em disco)."""
+    if imagens is None:
+        imagens = gerar_graficos(dados)
+    buffer = io.BytesIO()
+    montar_documento(dados, imagens, buffer)
+    return buffer.getvalue()
+
+
+def gerar_relatorio_dataframe(m: pd.DataFrame, ano: int, mes: int):
+    """Uso em linha de comando: grava o .docx e registra o mês no histórico."""
+    logger.info("[1/3] Calculando métricas de %04d-%02d ...", ano, mes)
+    dados = calcular_relatorio(m, ano, mes)
+    logger.info("[2/3] Gerando gráficos e documento em memória ...")
+    conteudo = gerar_docx_bytes(dados)
+    pasta = _nova_pasta_execucao()
+    caminho_docx = os.path.join(pasta, CONFIG["nome_docx"])
+    with open(caminho_docx, "wb") as arquivo:
+        arquivo.write(conteudo)
+    salvar_historico(dados["historico_atual"])
+    logger.info("[3/3] Relatório salvo em: %s", caminho_docx)
     return caminho_docx
 
 

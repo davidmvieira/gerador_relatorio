@@ -23,6 +23,17 @@
     {% endfor %}
   {% endwith %}
 
+  <nav class="month-nav" aria-label="Meses na planilha">
+    <span class="month-nav-label">Mês do relatório</span>
+    {% for m in meses %}
+      <a class="month-chip {% if m.mes == mes_referencia %}active{% endif %}"
+         href="{{ url_for('revisao', id_sessao=sessao, frente=frente, mes_referencia=m.mes) }}">
+        <strong>{{ m.rotulo }}</strong>
+        <small>{{ m.abertos }} abertos · {{ m.solucionados }} solucionados</small>
+      </a>
+    {% endfor %}
+  </nav>
+
   <nav class="tabs" role="tablist">
     <a role="tab" class="tab {% if frente == 'sustentacao' %}active{% endif %}"
        href="{{ url_for('revisao', id_sessao=sessao, frente='sustentacao') }}">
@@ -191,7 +202,7 @@
 
     <div class="actions-row">
       <button type="submit" class="primary" id="save-button">Salvar alterações</button>
-      <a class="button secondary" href="{{ url_for('preview', id_sessao=sessao, mes_referencia=mes_referencia) }}" target="_blank">Ver prévia</a>
+      <a class="button secondary" href="{{ url_for('preview', id_sessao=sessao, mes_referencia=mes_referencia) }}">Ver prévia</a>
     </div>
   </form>
 
@@ -208,10 +219,13 @@
   <section class="confirm">
     <h2>Confirmação</h2>
     <p>Período: <b>{{ mes_referencia }}</b> · Aba: <b>{{ frente_nome }}</b> · Registros ativos: <b>{{ total }}</b></p>
-    <form method="post" action="{{ url_for('gerar', id_sessao=sessao) }}">
-      <input type="hidden" name="mes_referencia" value="{{ mes_referencia }}">
-      <button {% if erros %}disabled title="Corrija os erros antes de gerar"{% endif %} class="primary">Gerar relatório (ambas as frentes)</button>
-    </form>
+    <div class="actions-row">
+      <a class="button secondary" href="{{ url_for('preview', id_sessao=sessao, mes_referencia=mes_referencia) }}">Ver prévia do relatório</a>
+      <form method="post" action="{{ url_for('gerar', id_sessao=sessao) }}" data-download>
+        <input type="hidden" name="mes_referencia" value="{{ mes_referencia }}">
+        <button {% if erros %}disabled title="Corrija os erros antes de gerar"{% endif %} class="primary">Baixar DOCX (ambas as frentes)</button>
+      </form>
+    </div>
   </section>
 </main>
 
@@ -241,7 +255,8 @@
   }
   rowSelects.forEach((el) => el.addEventListener('change', syncSelectAll));
 
-  document.querySelectorAll('form').forEach((form) => {
+  // Formulários de download não navegam: o botão não pode ficar travado.
+  document.querySelectorAll('form:not([data-download])').forEach((form) => {
     form.addEventListener('submit', () => {
       const button = form.querySelector('button[type="submit"]');
       if (button) {

@@ -1,0 +1,10 @@
+<div class="report-table">
+  <table>
+    <thead><tr>{% for h in t.cab %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for linha in t.linhas %}
+        <tr>{% for valor in linha %}<td>{{ valor }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

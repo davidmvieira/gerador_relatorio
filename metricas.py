@@ -122,6 +122,15 @@ def meses_disponiveis(df: pd.DataFrame) -> pd.DataFrame:
     }, columns=["mes", "abertos", "solucionados"])
 
 
+def mes_padrao(df: pd.DataFrame) -> str:
+    """Mês sugerido ao abrir a planilha: o mais recente com chamados abertos."""
+    meses = meses_disponiveis(df)
+    com_abertura = meses[meses["abertos"] > 0]
+    if com_abertura.empty:
+        return pd.Timestamp.now().strftime("%Y-%m")
+    return str(com_abertura["mes"].iloc[-1])
+
+
 # ---------------------------------------------------------------------------
 # Recorte do mês
 # ---------------------------------------------------------------------------

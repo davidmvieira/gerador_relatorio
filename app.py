@@ -4,6 +4,8 @@ O estado das sessões é persistido em JSON sob ``instance/sessoes`` por
 ``sessoes_store``; o dict legado existe apenas para migração durante reload.
 """
 
+import base64
+import io
 import os
 import uuid
 from datetime import datetime
@@ -13,6 +15,7 @@ from flask import Flask, flash, redirect, render_template, request, send_file, u
 from werkzeug.utils import secure_filename
 
 import gerar_relatorio_glpi as gerador
+import metricas
 import sessoes_store
 
 
@@ -90,10 +93,23 @@ def _sessao(id_sessao):
 
 
 def _mes_referencia_padrao(df):
-    datas = pd.to_datetime(df["date"], errors="coerce").dropna()
-    if datas.empty:
-        return datetime.now().strftime("%Y-%m")
-    return pd.Timestamp(datas.median()).strftime("%Y-%m")
+    return metricas.mes_padrao(df)
+
+
+_MESES_CURTOS = ["jan", "fev", "mar", "abr", "mai", "jun",
+                 "jul", "ago", "set", "out", "nov", "dez"]
+
+
+def _meses_da_planilha(df):
+    """Meses presentes nos registros incluídos, para o seletor de mês."""
+    if "incluir" in df.columns:
+        df = df[df["incluir"].astype(bool)]
+    meses = []
+    for linha in metricas.meses_disponiveis(df).itertuples(index=False):
+        ano, mes = (int(p) for p in linha.mes.split("-"))
+        meses.append({"mes": linha.mes, "rotulo": f"{_MESES_CURTOS[mes - 1]}/{ano}",
+                      "abertos": linha.abertos, "solucionados": linha.solucionados})
+    return meses
 
 
 def _normalizar_mes_referencia(sessao, valor=None):
@@ -378,6 +394,7 @@ def revisao(id_sessao):
         sessao["df"] = sessoes_store.df_da_sessao(sessao)
     _normalizar_mes_referencia(sessao, mes_solicitado or sessao.get("mes_referencia"))
     df = _df_com_frente(sessao).copy()
+    meses = _meses_da_planilha(df)
 
     # Contadores globais por aba (antes de aplicar filtros locais)
     total_sust = int((df["frente"] == FRENTES["sustentacao"]).sum())
@@ -436,6 +453,7 @@ def revisao(id_sessao):
         fases=FASES,
         frente=frente_key,
         frente_nome=FRENTES[frente_key],
+        meses=meses,
     )
 
 
@@ -514,148 +532,168 @@ def bulk_revisao(id_sessao):
     return redirect(url_for("revisao", id_sessao=id_sessao, frente=frente))
 
 
+def _mes_valido(valor):
+    try:
+        datetime.strptime(str(valor), "%Y-%m")
+        return True
+    except ValueError:
+        return False
+
+
+def _registros_incluidos(sessao):
+    df = _df_com_frente(sessao)
+    if "incluir" in df.columns:
+        df = df[df["incluir"].astype(bool)]
+    return df
+
+
+def _dados_do_mes(sessao, mes_referencia):
+    """Recorta o mês e calcula o relatório. Só leitura: nada é gravado em disco."""
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    sub = gerador.filtrar_periodo_referencia(_registros_incluidos(sessao), ano, mes)
+    if sub.empty:
+        return None
+    return gerador.calcular_relatorio(sub, ano, mes)
+
+
+def _tabela(par):
+    cabecalho, linhas = par
+    return {"cab": cabecalho, "linhas": linhas}
+
+
+def _mes_da_requisicao(sessao, valor=None):
+    mes = valor or sessao.get("mes_referencia") or _mes_referencia_padrao(sessao["df"])
+    return mes if _mes_valido(mes) else _mes_referencia_padrao(sessao["df"])
+
+
 @app.route("/preview/<id_sessao>")
 def preview(id_sessao):
+    """Prévia completa do relatório, idêntica ao .docx, sem gravar arquivos."""
     sessao = _sessao(id_sessao)
     if not sessao:
         flash("Sessão de revisão não encontrada.", "error")
         return redirect(url_for("index"))
 
-    mes_referencia = _normalizar_mes_referencia(
-        sessao, request.args.get("mes_referencia") or sessao.get("mes_referencia"))
-    ano, mes = [int(p) for p in mes_referencia.split("-")]
-    df = _df_com_frente(sessao).copy()
-    df = df[df.get("incluir", True)].copy()
-    sub = gerador.filtrar_periodo_referencia(df, ano, mes)
+    mes_referencia = _mes_da_requisicao(sessao, request.args.get("mes_referencia"))
+    incluidos = _registros_incluidos(sessao)
+    meses = _meses_da_planilha(incluidos)
+    problemas = metricas.inconsistencias(incluidos)
+    contexto = dict(sessao=id_sessao, mes_referencia=mes_referencia, meses=meses,
+                    erros=sessao["erros"], problemas=problemas.head(20).to_dict("records"),
+                    total_problemas=len(problemas))
 
-    F_SUST = gerador.CONFIG["nome_frente_sustentacao"]
-    F_PROJ = gerador.CONFIG["nome_frente_projetos"]
+    dados = _dados_do_mes(sessao, mes_referencia)
+    if dados is None:
+        return render_template("preview.html", dados=None, **contexto)
 
-    painel_total = gerador.metricas_painel(sub)
-    painel_sust = gerador.metricas_painel(sub, F_SUST)
-    painel_proj = gerador.metricas_painel(sub, F_PROJ)
-
-    def _cat_records(frente):
-        d = gerador.metricas_categoria(sub, frente).head(6).reset_index()
-        d = d.rename(columns={"index": "categoria"})
-        return d.to_dict("records")
-
-    categorias_sust = _cat_records(F_SUST)
-    categorias_proj = _cat_records(F_PROJ)
-    sla = gerador.metricas_sla_prioridade(sub, F_SUST).reset_index() \
-        .rename(columns={"index": "prioridade"}).to_dict("records")
-    capacidade_sust = gerador.metricas_capacidade(sub, F_SUST)
-    capacidade_proj = gerador.metricas_capacidade(sub, F_PROJ)
-
-    # Projetos relevantes com fase (substitui o campo 'origem' derivado)
-    proj_df = sub[sub["frente"] == F_PROJ].copy()
-    if "titulo_limpo" not in proj_df.columns:
-        proj_df["titulo_limpo"] = proj_df["name"].apply(gerador.limpar_titulo)
-    proj_df["fase_nome"] = proj_df["fase"].map(FASES).fillna(FASES[FASE_PADRAO])
-    proj_df["data_abertura_fmt"] = pd.to_datetime(proj_df["date"], errors="coerce") \
-        .dt.strftime("%d/%m/%y")
-    projetos = proj_df.sort_values(["fase", "date"]).head(50).to_dict("records")
-
+    imagens = {nome: base64.b64encode(png).decode("ascii")
+               for nome, png in gerador.gerar_graficos(dados).items() if png}
+    visao = dados["visao_historica"]
     return render_template(
         "preview.html",
-        sessao=id_sessao,
-        periodo=_periodo(sub, mes_referencia),
-        mes_referencia=mes_referencia,
-        painel_total=painel_total,
-        painel_sust=painel_sust,
-        painel_proj=painel_proj,
-        categorias_sust=categorias_sust,
-        categorias_proj=categorias_proj,
-        sla=sla,
-        capacidade_sust=capacidade_sust,
-        capacidade_proj=capacidade_proj,
-        projetos=projetos,
-        status=STATUS,
-        prioridades=PRIORIDADES,
-        fases=FASES,
+        dados=dados,
+        imagens=imagens,
+        config=gerador.CONFIG,
+        painel=_tabela(gerador.tabela_painel(dados)),
+        comparacao=_tabela(gerador.tabela_comparacao(dados)) if visao["anterior"] else None,
+        descricao_anterior=(gerador._descricao_periodo_anterior(
+            mes_referencia, visao["anterior"]["periodo"]) if visao["anterior"] else None),
+        projecao=_tabela(gerador.tabela_projecao(dados)) if visao["projecao"] else None,
+        categorias=[
+            {"frente": dados["F_SUST"], "total": dados["painel_sust"]["total_relevante"],
+             "classe": "sust", **_tabela(gerador.tabela_categorias(dados["cat_sust"]))},
+            {"frente": dados["F_PROJ"], "total": dados["painel_proj"]["total_relevante"],
+             "classe": "proj", **_tabela(gerador.tabela_categorias(dados["cat_proj"]))},
+        ],
+        projetos=_tabela(gerador.tabela_projetos(dados["tabela_projetos"])),
+        sla=(None if dados["sla_sust"].empty
+             else _tabela(gerador.tabela_sla(dados["sla_sust"]))),
+        capacidade=_tabela(gerador.tabela_capacidade(dados["cap_sust"], dados["F_SUST"])),
+        textos={
+            "escopo": gerador.TEXTO_ESCOPO,
+            "escopo_nota": gerador.texto_escopo_nota(dados),
+            "historico_atual": gerador.texto_historico_atual(dados),
+            "historico_ignorado": gerador.texto_historico_ignorado(dados),
+            "leitura_painel": gerador.TEXTO_LEITURA_PAINEL,
+            "definicoes_painel": gerador.TEXTO_DEFINICOES_PAINEL,
+            "avisos_painel": gerador.avisos_painel(dados),
+            "outlier_sla": gerador.texto_outlier_sla(dados),
+            "premissas": gerador.texto_premissas(),
+            "notas_capacidade": gerador.NOTAS_CAPACIDADE,
+        },
+        **contexto,
     )
 
 
 @app.route("/gerar/<id_sessao>", methods=["POST"])
 def gerar(id_sessao):
+    """Entrega o .docx direto para download, montado em memória."""
     sessao = _sessao(id_sessao)
     if not sessao:
         flash("Sessão de revisão não encontrada.", "error")
         return redirect(url_for("index"))
 
-    def salvar_edicoes_para_geracao(atual):
-        df = _atualizar_por_formulario(sessoes_store.df_da_sessao(atual))
-        df = _garantir_campos_livres(df)
-        for indice in df.index:
-            if f"categoria_{indice}" in request.form:
-                df.at[indice, "incluir"] = f"incluir_{indice}" in request.form
-        atual["erros"], atual["avisos"] = _validar(df)
-        atual["df"] = df
-        atual.pop("registros", None)
-        mes_form = request.form.get("mes_referencia")
-        if mes_form:
-            atual["mes_referencia"] = mes_form
+    houve_edicao = any(chave.startswith("categoria_") for chave in request.form)
+    if houve_edicao:
+        def salvar_edicoes_para_geracao(atual):
+            df = _atualizar_por_formulario(sessoes_store.df_da_sessao(atual))
+            df = _garantir_campos_livres(df)
+            for indice in df.index:
+                if f"categoria_{indice}" in request.form:
+                    df.at[indice, "incluir"] = f"incluir_{indice}" in request.form
+            atual["erros"], atual["avisos"] = _validar(df)
+            atual["df"] = df
+            atual.pop("registros", None)
 
-    sessao = sessoes_store.atualizar_sessao(id_sessao, salvar_edicoes_para_geracao)
-    sessao["df"] = sessoes_store.df_da_sessao(sessao)
+        sessao = sessoes_store.atualizar_sessao(id_sessao, salvar_edicoes_para_geracao)
+        sessao["df"] = sessoes_store.df_da_sessao(sessao)
+
+    mes_referencia = _mes_da_requisicao(sessao, request.form.get("mes_referencia"))
+    origem = request.form.get("origem")
+    voltar = (url_for("preview", id_sessao=id_sessao, mes_referencia=mes_referencia)
+              if origem == "preview" else url_for("revisao", id_sessao=id_sessao))
     if sessao["erros"]:
         flash("Corrija os erros impeditivos antes de gerar o relatório.", "error")
-        return redirect(url_for("revisao", id_sessao=id_sessao))
+        return redirect(voltar)
 
-    dados_relevantes = sessao["df"][sessao["df"].get("incluir", True)].copy()
-    if dados_relevantes.empty:
-        flash("Nenhum registro está incluído para geração.", "warning")
-        return redirect(url_for("revisao", id_sessao=id_sessao))
-
-    mes_referencia = _normalizar_mes_referencia(
-        sessao, request.form.get("mes_referencia") or sessao.get("mes_referencia"))
-    ano, mes = [int(p) for p in mes_referencia.split("-")]
-    df_filtrado = gerador.filtrar_periodo_referencia(dados_relevantes, ano, mes)
-    if df_filtrado.empty:
-        flash(f"Nenhum chamado relevante para {mes_referencia}.", "warning")
-        return redirect(url_for("revisao", id_sessao=id_sessao))
     try:
-        caminho = gerador.gerar_relatorio_dataframe(df_filtrado, ano, mes)
-        if not os.path.isfile(caminho):
-            raise RuntimeError("O arquivo DOCX não foi criado.")
+        dados = _dados_do_mes(sessao, mes_referencia)
+        if dados is None:
+            flash(f"Nenhum chamado relevante para {mes_referencia}.", "warning")
+            return redirect(voltar)
+        conteudo = gerador.gerar_docx_bytes(dados)
     except Exception as erro:
         flash(f"Falha ao gerar o relatório: {erro}", "error")
-        return redirect(url_for("revisao", id_sessao=id_sessao))
+        return redirect(voltar)
 
-    periodo = _periodo(sessao["df"], mes_referencia)
-    execucao = os.path.basename(os.path.dirname(caminho))
-    sessoes_store.atualizar_sessao(
-        id_sessao,
-        lambda atual: atual.update({"resultado": {
-            "caminho": caminho, "periodo": periodo, "execucao": execucao}}))
-    return redirect(url_for("resultado", id_sessao=id_sessao))
+    return send_file(
+        io.BytesIO(conteudo),
+        as_attachment=True,
+        download_name=f"Relatorio_Sistemas_{mes_referencia}.docx",
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
-@app.route("/resultado/<id_sessao>")
-def resultado(id_sessao):
+@app.route("/historico/<id_sessao>", methods=["POST"])
+def registrar_historico(id_sessao):
+    """Único ponto que grava o mês no histórico — por decisão explícita do usuário."""
     sessao = _sessao(id_sessao)
-    if not sessao or "resultado" not in sessao:
+    if not sessao:
+        flash("Sessão de revisão não encontrada.", "error")
         return redirect(url_for("index"))
-    resultado = sessao["resultado"]
-    pasta = os.path.dirname(resultado["caminho"])
-    arquivos = sorted(os.listdir(pasta))
-    return render_template("result.html", sessao=id_sessao,
-                           resultado=resultado, arquivos=arquivos)
-
-
-@app.route("/resultado/<id_sessao>/arquivo/<nome>")
-def arquivo_resultado(id_sessao, nome):
-    sessao = _sessao(id_sessao)
-    if not sessao or "resultado" not in sessao:
-        return redirect(url_for("index"))
-    pasta = os.path.dirname(sessao["resultado"]["caminho"])
-    caminho = os.path.join(pasta, nome)
-    if os.path.commonpath([os.path.abspath(pasta), os.path.abspath(caminho)]) \
-            != os.path.abspath(pasta):
-        return "Arquivo inválido", 400
-    if not os.path.isfile(caminho):
-        return "Arquivo não encontrado", 404
-    return send_file(caminho, as_attachment=nome.lower().endswith(".docx"))
+    mes_referencia = _mes_da_requisicao(sessao, request.form.get("mes_referencia"))
+    destino = url_for("preview", id_sessao=id_sessao, mes_referencia=mes_referencia)
+    if sessao["erros"]:
+        flash("Corrija os erros impeditivos antes de registrar o mês.", "error")
+        return redirect(destino)
+    dados = _dados_do_mes(sessao, mes_referencia)
+    if dados is None:
+        flash(f"Nenhum chamado relevante para {mes_referencia}.", "warning")
+        return redirect(destino)
+    gerador.salvar_historico(dados["historico_atual"])
+    flash(f"{mes_referencia} registrado no histórico: passa a ser usado nas "
+          "comparações dos próximos meses.", "success")
+    return redirect(destino)
 
 
 if __name__ == "__main__":

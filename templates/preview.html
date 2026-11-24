@@ -1,26 +1,173 @@
-<section class="preview-section">
-  <h2>Projetos relevantes</h2>
-  <div class="preview-card">
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th><th>Título</th><th>Entidade</th><th>Fase</th>
-          <th>Status</th><th>Abertura</th><th>Tempo</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for linha in projetos %}
-          <tr>
-            <td>{{ linha.id }}</td>
-            <td>{{ linha.titulo_limpo }}</td>
-            <td>{{ linha.entidade }}</td>
-            <td><span class="badge-fase fase-{{ linha.fase }}">{{ linha.fase_nome }}</span></td>
-            <td>{{ linha.status_nome }}</td>
-            <td>{{ linha.data_abertura_fmt }}</td>
-            <td>{{ '%.1f'|format(linha.tempo_h) if linha.tempo_h == linha.tempo_h else '—' }}h</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Prévia {{ mes_referencia }} · Gerador GLPI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+<main class="shell wide preview-page">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">GLPI · prévia do relatório</p>
+      <h1>{{ dados.periodo_texto if dados else mes_referencia }}</h1>
+      <p class="muted">O que está nesta página é exatamente o que vai no documento. Nada é gravado até você baixar ou registrar o mês.</p>
+    </div>
+    <a class="link" href="{{ url_for('revisao', id_sessao=sessao, mes_referencia=mes_referencia) }}">← Voltar à revisão</a>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for categoria, mensagem in messages %}<div class="alert {{ categoria }}">{{ mensagem }}</div>{% endfor %}
+  {% endwith %}
+
+  <nav class="month-nav" aria-label="Meses na planilha">
+    <span class="month-nav-label">Meses na planilha</span>
+    {% for m in meses %}
+      <a class="month-chip {% if m.mes == mes_referencia %}active{% endif %}"
+         href="{{ url_for('preview', id_sessao=sessao, mes_referencia=m.mes) }}">
+        <strong>{{ m.rotulo }}</strong>
+        <small>{{ m.abertos }} abertos · {{ m.solucionados }} solucionados</small>
+      </a>
+    {% endfor %}
+  </nav>
+
+  <div class="preview-actions">
+    <form method="post" action="{{ url_for('gerar', id_sessao=sessao) }}" data-download>
+      <input type="hidden" name="mes_referencia" value="{{ mes_referencia }}">
+      <input type="hidden" name="origem" value="preview">
+      <button class="primary" {% if erros or not dados %}disabled{% endif %}>Baixar DOCX de {{ mes_referencia }}</button>
+    </form>
+    <form method="post" action="{{ url_for('registrar_historico', id_sessao=sessao) }}"
+          onsubmit="return confirm('Registrar {{ mes_referencia }} no histórico? Ele passará a ser usado nas comparações dos próximos meses.');">
+      <input type="hidden" name="mes_referencia" value="{{ mes_referencia }}">
+      <button class="secondary" {% if erros or not dados %}disabled{% endif %}>Registrar mês no histórico</button>
+    </form>
   </div>
-</section>
+
+  {% if erros %}
+    <div class="validation error"><b>Há erros impeditivos na revisão.</b> Corrija-os antes de baixar o relatório.</div>
+  {% endif %}
+  {% if total_problemas %}
+    <details class="validation warning">
+      <summary><b>{{ total_problemas }} chamado(s) com dados que afetam a fidelidade</b></summary>
+      <ul>{% for p in problemas %}<li>Chamado {{ p.id }}: {{ p.problema }}</li>{% endfor %}</ul>
+      {% if total_problemas > problemas|length %}<p>… e mais {{ total_problemas - problemas|length }}.</p>{% endif %}
+    </details>
+  {% endif %}
+
+  {% if not dados %}
+    <div class="validation warning">Nenhum chamado da planilha passou por {{ mes_referencia }}. Escolha outro mês acima.</div>
+  {% else %}
+  {% set ps = dados.painel_sust %}
+  <section class="kpis" aria-label="Indicadores de {{ dados.F_SUST }}">
+    <p class="kpis-title">{{ dados.F_SUST }}</p>
+    <div><span>Backlog inicial</span><strong>{{ ps.backlog_inicial }}</strong></div>
+    <div><span>Abertos</span><strong>{{ ps.novos }}</strong></div>
+    <div><span>Solucionados</span><strong>{{ ps.entregues }}</strong></div>
+    <div><span>Backlog final</span><strong>{{ ps.backlog_final }}</strong>
+      <em class="{% if ps.saldo > 0 %}up{% elif ps.saldo < 0 %}down{% endif %}">saldo {{ '+' if ps.saldo > 0 }}{{ ps.saldo }}</em></div>
+    <div><span>Absorção</span><strong>{{ ps.absorcao_pct if ps.absorcao_pct is not none else '—' }}{% if ps.absorcao_pct is not none %}%{% endif %}</strong></div>
+    <div><span>TMR mediana</span><strong>{{ ps.tmr_mediana_h if ps.tmr_mediana_h is not none else '—' }}{% if ps.tmr_mediana_h is not none %} h{% endif %}</strong></div>
+  </section>
+
+  {% for aviso in textos.avisos_painel %}<p class="note warn">{{ aviso }}</p>{% endfor %}
+
+  <article class="report">
+    <section>
+      <h2>Escopo do Período</h2>
+      <p>Este relatório considera todo chamado que passou por {{ dados.periodo_texto }}:</p>
+      <ul>{% for item in textos.escopo %}<li>{{ item }}</li>{% endfor %}</ul>
+      <p class="note">{{ textos.escopo_nota }}</p>
+    </section>
+
+    <section>
+      <h2>Visão Histórica</h2>
+      <p>{{ textos.historico_atual }}</p>
+      {% if textos.historico_ignorado %}<p class="note warn">{{ textos.historico_ignorado }}</p>{% endif %}
+      {% if comparacao %}
+        <p class="note">{{ descricao_anterior|capitalize }}. Os valores não são classificados como favoráveis ou desfavoráveis.</p>
+        {% with t = comparacao %}{% include "_tabela.html" %}{% endwith %}
+      {% else %}
+        <p class="note">Sem período anterior registrado para comparação. Use “Registrar mês no histórico” para que este mês sirva de base ao próximo.</p>
+      {% endif %}
+      {% if projecao %}
+        <h3>Projeção do Próximo Mês</h3>
+        <p class="note">ESTIMATIVA via média móvel simples dos 3 últimos meses. Não é uma previsão garantida.</p>
+        {% with t = projecao %}{% include "_tabela.html" %}{% endwith %}
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>1. Painel Geral — Fluxo do Período</h2>
+      <p>{{ textos.leitura_painel }}</p>
+      {% with t = painel %}{% include "_tabela.html" %}{% endwith %}
+      <p class="note">{{ textos.definicoes_painel }}</p>
+      {% if imagens.donut %}<figure><img src="data:image/png;base64,{{ imagens.donut }}" alt="Natureza dos chamados abertos — {{ dados.F_SUST }}" class="img-sm"><figcaption>Natureza dos chamados abertos no período — frente {{ dados.F_SUST }}.</figcaption></figure>{% endif %}
+    </section>
+
+    <section>
+      <h2>2. Distribuição por Categoria (base relevante)</h2>
+      {% for c in categorias %}
+        <p class="banner {{ c.classe }}">FRENTE {{ c.frente|upper }} — {{ c.total }} chamados no mês</p>
+        {% with t = c %}{% include "_tabela.html" %}{% endwith %}
+      {% endfor %}
+      {% if imagens.barras_sust %}<figure><img src="data:image/png;base64,{{ imagens.barras_sust }}" alt="Volume por categoria — {{ dados.F_SUST }}"></figure>{% endif %}
+    </section>
+
+    <section>
+      <h2>3. Frente {{ dados.F_PROJ }} — Detalhamento Completo</h2>
+      <p class="note">Lista todos os chamados de {{ dados.F_PROJ }} do período: em aberto no dia 01 ou abertos no mês. Projetos longos permanecem visíveis enquanto ativos.</p>
+      {% with t = projetos %}{% include "_tabela.html" %}{% endwith %}
+    </section>
+
+    <section>
+      <h2>4. SLA por Prioridade — Frente {{ dados.F_SUST }}</h2>
+      <p class="note">Considera apenas chamados SOLUCIONADOS no período, independente de quando foram abertos. Tempos em horas corridas.</p>
+      {% if sla %}
+        {% with t = sla %}{% include "_tabela.html" %}{% endwith %}
+        <p class="note">Meta SLA provisória (CONFIG['sla_alvo_horas']): ainda não reflete o SLA institucional P1–P4 em dias úteis.</p>
+      {% else %}
+        <p class="note">Sem chamados solucionados na frente {{ dados.F_SUST }} no período.</p>
+      {% endif %}
+      {% if textos.outlier_sla %}<p class="note">{{ textos.outlier_sla }}</p>{% endif %}
+    </section>
+
+    <section>
+      <h2>5. Capacidade da Equipe — Frente {{ dados.F_SUST }}</h2>
+      <p class="note">{{ textos.premissas }}</p>
+      {% with t = capacidade %}{% include "_tabela.html" %}{% endwith %}
+      {% for nota in textos.notas_capacidade %}<p class="note">{{ nota }}</p>{% endfor %}
+    </section>
+
+    <section>
+      <h2>6. Série Histórica Gerencial</h2>
+      {% if dados.visao_historica.serie|length < 2 %}
+        <p class="note">A série histórica aparecerá quando houver ≥ 2 meses registrados.</p>
+      {% else %}
+        <p class="note">Série da frente {{ dados.F_SUST }} a partir dos meses registrados no histórico com a mesma regra de cálculo, mais o mês deste relatório.</p>
+        {% for chave in ['hist_fluxo', 'hist_backlog_frente', 'hist_tmr', 'hist_taxa'] %}
+          {% if imagens[chave] %}<figure><img src="data:image/png;base64,{{ imagens[chave] }}" alt="Gráfico da série histórica"></figure>{% endif %}
+        {% endfor %}
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>7. Observações e Plano de Ação</h2>
+      <p class="note">Espaço para o autor completar no documento baixado.</p>
+    </section>
+  </article>
+  {% endif %}
+</main>
+<script>
+  // Mantém o botão de download utilizável: o navegador baixa o arquivo e fica na página.
+  document.querySelectorAll('form[data-download]').forEach((form) => {
+    form.addEventListener('submit', () => {
+      const botao = form.querySelector('button');
+      botao.classList.add('loading');
+      setTimeout(() => botao.classList.remove('loading'), 2500);
+    });
+  });
+</script>
+</body>
+</html>

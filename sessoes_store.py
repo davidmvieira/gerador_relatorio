@@ -230,9 +230,7 @@ def _gravar_sem_lock(sessao: dict) -> dict:
 
 def criar_sessao(df: pd.DataFrame, nome_arquivo: str, erros: list,
                  avisos: list) -> str:
-    datas = pd.to_datetime(df.get("date"), errors="coerce").dropna()
-    mes = (pd.Timestamp(datas.median()).strftime("%Y-%m") if not datas.empty
-           else datetime.now().strftime("%Y-%m"))
+    mes = gerador.metricas.mes_padrao(df)
     id_sessao = uuid.uuid4().hex
     salvar_sessao({
         "id_sessao": id_sessao,
