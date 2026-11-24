@@ -170,22 +170,6 @@ class TestFluxoWeb(unittest.TestCase):
         df = sessoes_store.df_da_sessao(sessao)
         self.assertEqual(df.loc[0, "categoria"], "Categoria Editada")
 
-    def test_sessao_no_formato_antigo_e_migrada(self):
-        sessao = sessoes_store.carregar_sessao(self.sessao)
-        registros = sessoes_store._registros_da_sessao(sessao)
-        legado_id = "a" * 32
-        pasta = os.path.join(self.tmp.name, "sessoes")
-        with open(os.path.join(pasta, f"{legado_id}.json"), "w", encoding="utf-8") as f:
-            json.dump({**sessao, "id_sessao": legado_id, "registros": registros,
-                       "edicoes": {}}, f)
-        antigo = sessoes_store.carregar_sessao(legado_id)
-        self.assertEqual(len(sessoes_store.df_da_sessao(antigo)), len(registros))
-        sessoes_store.atualizar_sessao(legado_id, lambda s: s.update(mes_referencia="2026-08"))
-        migrado = sessoes_store.carregar_sessao(legado_id)
-        self.assertNotIn("registros", migrado)
-        self.assertTrue(os.path.exists(os.path.join(pasta, f"{legado_id}.base.json")))
-        self.assertEqual(len(sessoes_store.df_da_sessao(migrado)), len(registros))
-
     def test_upload_nao_grava_o_arquivo_enviado(self):
         uploads = os.path.join(aplicacao.app.instance_path, "uploads")
         antes = _arquivos(uploads) if os.path.isdir(uploads) else []

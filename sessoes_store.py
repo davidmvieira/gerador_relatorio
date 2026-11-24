@@ -240,9 +240,7 @@ def _diferencas(base: list, registros: list) -> dict:
 
 
 def _registros_da_sessao(sessao: dict) -> list:
-    """Base gravada na criação + edições. Aceita o formato antigo (registros inline)."""
-    if "registros" in sessao:
-        return sessao["registros"]
+    """Base gravada na criação + edições."""
     base = _carregar_base(sessao["id_sessao"]) or []
     registros = [dict(registro) for registro in base]
     for posicao, campos in (sessao.get("edicoes") or {}).items():
@@ -256,8 +254,7 @@ def _normalizar_sessao(sessao: dict) -> dict:
     """Prepara o arquivo pequeno da sessão (metadados + edições).
 
     Se vierem registros (ou um DataFrame), eles viram diferenças em relação à
-    base; a base é gravada só quando ainda não existe (criação ou migração do
-    formato antigo, que guardava a planilha inteira a cada edição).
+    base; a base é gravada só na criação (ou se o número de registros mudar).
     """
     agora = datetime.now().isoformat(timespec="seconds")
     payload = dict(sessao)
@@ -273,7 +270,6 @@ def _normalizar_sessao(sessao: dict) -> dict:
     payload.setdefault("erros", [])
     payload.setdefault("avisos", [])
     payload.setdefault("edicoes", {})
-    payload.pop("resultado", None)  # página de resultado não existe mais
 
     if "registros" in payload:
         registros = _normalizar_registros(payload.pop("registros"))
