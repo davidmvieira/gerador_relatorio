@@ -35,10 +35,10 @@
   </nav>
 
   <section class="metrics">
-    <div><span>Relevantes ({{ frente_nome }})</span><strong>{{ indicadores.total }}</strong></div>
-    <div><span>Entregues</span><strong>{{ indicadores.resolvidos }}</strong></div>
-    <div><span>Taxa</span><strong>{{ indicadores.taxa }}%</strong></div>
-    <div><span>TMR</span><strong>{% if indicadores.tmr is not none %}{{ indicadores.tmr }} h{% else %}—{% endif %}</strong></div>
+    <div><span>No mês ({{ frente_nome }})</span><strong>{{ indicadores.total }}</strong></div>
+    <div><span>Solucionados</span><strong>{{ indicadores.resolvidos }}</strong></div>
+    <div><span>Absorção</span><strong>{{ indicadores.taxa }}%</strong></div>
+    <div><span>TMR mediana</span><strong>{% if indicadores.tmr is not none %}{{ indicadores.tmr }} h{% else %}—{% endif %}</strong></div>
   </section>
 
   {% if erros %}

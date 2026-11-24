@@ -215,7 +215,7 @@ def _indicadores(df, mes_referencia=None, frente_key=None):
         "total": total.get("total_relevante", len(base)),
         "resolvidos": total["entregues"],
         "taxa": total["taxa_resolucao"],
-        "tmr": total["tmr_h"],
+        "tmr": total["tmr_mediana_h"],
     }
 
 
