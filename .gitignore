@@ -11,11 +11,12 @@ dados_*.csv
 # Estado local do app: sessões de revisão, configuração e uploads
 instance/
 
-# Saídas geradas e backups
-relatorios_glpi/execucoes/
+# Saídas geradas, histórico mensal registrado e backups
+relatorios_glpi/
 saida_relatorio/
 *.bak
 *.tmp
 
 # Ferramentas locais
 .claude/
+.vscode/
