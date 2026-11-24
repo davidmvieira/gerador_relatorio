@@ -5,6 +5,7 @@ Rodar na raiz do projeto:
 """
 
 import io
+import json
 import logging
 import os
 import re
@@ -109,6 +110,87 @@ class TestFluxoWeb(unittest.TestCase):
         html = self.cliente.get(f"/preview/{self.sessao}?mes_referencia=2026-09") \
             .get_data(as_text=True)
         self.assertIn("Comparação com 2026-08", html)
+
+    # ---------------- Fase 3: série da própria planilha ----------------
+    def test_comparacao_com_mes_anterior_da_planilha_sem_registrar(self):
+        html = self.cliente.get(f"/preview/{self.sessao}?mes_referencia=2026-09") \
+            .get_data(as_text=True)
+        self.assertIn("Comparação com 2026-08", html)
+        serie = _texto_celulas_html(html, "6. Série Histórica")
+        self.assertEqual(serie[1], ["2026-08 *", "127", "119", "8", "93.7%", "17.8 h",
+                                    "planilha"])
+        self.assertEqual(serie[2][0], "2026-09")
+        self.assertEqual(serie[2][-1], "este relatório")
+        self.assertEqual(_arquivos(self.saidas), [])
+
+    def test_mes_registrado_prevalece_sobre_a_planilha(self):
+        self.cliente.post(f"/historico/{self.sessao}", data={"mes_referencia": "2026-08"})
+        caminho = os.path.join(gerador.CONFIG["pasta_historico"], "2026-08.json")
+        with open(caminho, encoding="utf-8") as arquivo:
+            registro = json.load(arquivo)
+        self.assertNotIn("fonte", registro)
+        registro["sustentacao"]["novos"] = 999
+        with open(caminho, "w", encoding="utf-8") as arquivo:
+            json.dump(registro, arquivo)
+        html = self.cliente.get(f"/preview/{self.sessao}?mes_referencia=2026-09") \
+            .get_data(as_text=True)
+        serie = _texto_celulas_html(html, "6. Série Histórica")
+        self.assertEqual(serie[1][1], "999")
+        self.assertEqual(serie[1][-1], "histórico registrado")
+
+    def test_serie_nao_mostra_meses_posteriores(self):
+        html = self.cliente.get(f"/preview/{self.sessao}?mes_referencia=2026-08") \
+            .get_data(as_text=True)
+        self.assertNotIn("2026-09", html.split("6. Série Histórica", 1)[1])
+
+    # ---------------- Fase 3: sessão leve ----------------
+    def test_sessao_guarda_base_uma_vez_e_so_edicoes(self):
+        pasta = os.path.join(self.tmp.name, "sessoes")
+        meta = os.path.join(pasta, f"{self.sessao}.json")
+        base = os.path.join(pasta, f"{self.sessao}.base.json")
+        mtime_base = os.path.getmtime(base)
+        self.assertLess(os.path.getsize(meta), 3_000)
+        self.assertGreater(os.path.getsize(base), 20_000)
+
+        resposta = self.cliente.post(f"/revisao/{self.sessao}/salvar", data={
+            "categoria_0": "Categoria Editada", "incluir_0": "on",
+            "frente": "sustentacao", "pagina": "1"})
+        self.assertEqual(resposta.status_code, 302)
+        self.cliente.get(f"/revisao/{self.sessao}?mes_referencia=2026-08")
+
+        self.assertEqual(os.path.getmtime(base), mtime_base)
+        self.assertLess(os.path.getsize(meta), 3_000)
+        sessao = sessoes_store.carregar_sessao(self.sessao)
+        self.assertNotIn("registros", sessao)
+        self.assertEqual(sessao["edicoes"]["0"], {"categoria": "Categoria Editada"})
+        self.assertEqual(sessao["mes_referencia"], "2026-08")
+        df = sessoes_store.df_da_sessao(sessao)
+        self.assertEqual(df.loc[0, "categoria"], "Categoria Editada")
+
+    def test_sessao_no_formato_antigo_e_migrada(self):
+        sessao = sessoes_store.carregar_sessao(self.sessao)
+        registros = sessoes_store._registros_da_sessao(sessao)
+        legado_id = "a" * 32
+        pasta = os.path.join(self.tmp.name, "sessoes")
+        with open(os.path.join(pasta, f"{legado_id}.json"), "w", encoding="utf-8") as f:
+            json.dump({**sessao, "id_sessao": legado_id, "registros": registros,
+                       "edicoes": {}}, f)
+        antigo = sessoes_store.carregar_sessao(legado_id)
+        self.assertEqual(len(sessoes_store.df_da_sessao(antigo)), len(registros))
+        sessoes_store.atualizar_sessao(legado_id, lambda s: s.update(mes_referencia="2026-08"))
+        migrado = sessoes_store.carregar_sessao(legado_id)
+        self.assertNotIn("registros", migrado)
+        self.assertTrue(os.path.exists(os.path.join(pasta, f"{legado_id}.base.json")))
+        self.assertEqual(len(sessoes_store.df_da_sessao(migrado)), len(registros))
+
+    def test_upload_nao_grava_o_arquivo_enviado(self):
+        uploads = os.path.join(aplicacao.app.instance_path, "uploads")
+        antes = _arquivos(uploads) if os.path.isdir(uploads) else []
+        with open(ARQUIVO_REAL, "rb") as arquivo:
+            self.cliente.post("/", data={"arquivo": (io.BytesIO(arquivo.read()), "x.csv")},
+                              content_type="multipart/form-data")
+        depois = _arquivos(uploads) if os.path.isdir(uploads) else []
+        self.assertEqual(antes, depois)
 
     def test_mes_sem_chamados(self):
         resposta = self.cliente.get(f"/preview/{self.sessao}?mes_referencia=2020-01")

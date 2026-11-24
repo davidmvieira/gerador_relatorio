@@ -173,17 +173,21 @@ def _fmt_variacao(valor, unidade: str = "", casas: int = 1) -> str:
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}")
 
 
-def _ler_entrada(caminho_entrada: str):
-    extensao = os.path.splitext(caminho_entrada)[1].lower()
+def _ler_entrada(entrada, nome: Optional[str] = None):
+    """Lê CSV/Excel de um caminho ou de um arquivo em memória (``nome`` dá a extensão)."""
+    nome = nome or str(entrada)
+    extensao = os.path.splitext(nome)[1].lower()
+    if not isinstance(entrada, (str, os.PathLike)):
+        entrada = io.BytesIO(entrada.read() if hasattr(entrada, "read") else entrada)
     if extensao == ".csv":
         try:
-            return pd.read_csv(caminho_entrada, sep=None, engine="python",
-                               encoding="utf-8-sig")
+            return pd.read_csv(entrada, sep=None, engine="python", encoding="utf-8-sig")
         except UnicodeDecodeError:
-            return pd.read_csv(caminho_entrada, sep=None, engine="python",
-                               encoding="latin-1")
+            if hasattr(entrada, "seek"):
+                entrada.seek(0)
+            return pd.read_csv(entrada, sep=None, engine="python", encoding="latin-1")
     if extensao in (".xlsx", ".xlsm"):
-        return pd.ExcelFile(caminho_entrada)
+        return pd.ExcelFile(entrada)
     raise ValueError("Formato não suportado. Use .xlsx, .xlsm ou .csv.")
 
 
@@ -223,13 +227,14 @@ def _reparar_linhas_deslocadas(m: pd.DataFrame) -> pd.DataFrame:
     return m
 
 
-def carregar_dados(caminho_entrada: str) -> pd.DataFrame:
-    entrada = _ler_entrada(caminho_entrada)
+def carregar_dados(caminho_entrada, nome: Optional[str] = None) -> pd.DataFrame:
+    """``caminho_entrada`` pode ser um caminho ou bytes/arquivo em memória (com ``nome``)."""
+    entrada = _ler_entrada(caminho_entrada, nome)
     eh_csv = isinstance(entrada, pd.DataFrame)
     abas = [None] if eh_csv else entrada.sheet_names
 
     if len(abas) == 1:
-        df = entrada if eh_csv else pd.read_excel(caminho_entrada, sheet_name=abas[0])
+        df = entrada if eh_csv else pd.read_excel(entrada, sheet_name=abas[0])
         _validar_schema(df,
                         {"id_chamado", "titulo", "data_abertura", "status_atual",
                          "prioridade", "tipo_chamado", "categoria", "entidade"},
@@ -256,8 +261,8 @@ def carregar_dados(caminho_entrada: str) -> pd.DataFrame:
         df["categoria"] = df["categoria"].fillna("Sem categoria")
         m = df
     else:
-        df1 = pd.read_excel(caminho_entrada, sheet_name=CONFIG["aba_principal"])
-        df2 = pd.read_excel(caminho_entrada, sheet_name=CONFIG["aba_detalhe"])
+        df1 = pd.read_excel(entrada, sheet_name=CONFIG["aba_principal"])
+        df2 = pd.read_excel(entrada, sheet_name=CONFIG["aba_detalhe"])
         _validar_schema(df1, {"id", "name", "date", "categoria", "status",
                               "priority", "type", "entidade"},
                         CONFIG["aba_principal"])
@@ -620,6 +625,7 @@ def salvar_historico(registro: dict):
     if os.path.exists(destino):
         shutil.copy2(destino, destino + ".bak")
         logger.info("Backup do histórico: %s.bak", destino)
+    registro = {k: v for k, v in registro.items() if k != "fonte"}
     with open(destino, "w", encoding="utf-8") as f:
         json.dump(registro, f, ensure_ascii=False, indent=2)
 
@@ -986,6 +992,36 @@ def tabela_projecao(dados: dict) -> tuple[list, list]:
     return ["Indicador", "Estimativa"], linhas
 
 
+def tabela_serie(dados: dict) -> tuple[list, list]:
+    """Série mensal da Sustentação, com a origem de cada mês."""
+    linhas = []
+    for reg in dados["visao_historica"]["serie"]:
+        s = reg.get("sustentacao", {})
+        periodo = reg["periodo"] + (" *" if reg.get("backlog_inicial_incompleto") else "")
+        if reg["periodo"] == dados["mes_referencia"]:
+            fonte = "este relatório"
+        else:
+            fonte = reg.get("fonte", FONTE_REGISTRADO)
+        linhas.append([periodo, _fmt_num(s.get("novos")), _fmt_num(s.get("entregues")),
+                       _fmt_num(s.get("backlog_final")), _p(s.get("taxa_resolucao")),
+                       _h(s.get("tmr_mediana_h")), fonte])
+    return ["Mês", "Abertos", "Solucionados", "Backlog final", "Absorção",
+            "TMR mediana", "Origem"], linhas
+
+
+TEXTO_SERIE = (
+    "Meses anteriores presentes na planilha são calculados na hora, com a mesma "
+    "regra deste relatório. Quando um mês foi registrado no histórico, valem os "
+    "números registrados (os já apresentados). * = a planilha não cobre os meses "
+    "anteriores a ele, então o backlog inicial desse mês pode estar subestimado.")
+
+
+TEXTO_SEM_ANTERIOR = ("Sem mês anterior para comparação: a planilha não contém o mês "
+                      "anterior e ele não foi registrado no histórico.")
+TEXTO_SEM_SERIE = ("A série aparece quando houver ao menos 2 meses: na própria planilha "
+                   "ou registrados no histórico.")
+
+
 def tabela_categorias(cat_df: pd.DataFrame) -> tuple[list, list]:
     linhas = [[idx, int(r["qtd"]), f'{r["pct_qtd"]}%',
                f'{r["tempo_h"]:.1f}', f'{r["pct_tempo"]}%']
@@ -1187,7 +1223,7 @@ def montar_documento(dados: dict, imagens: dict, destino):
         cab, linhas = tabela_comparacao(dados)
         adicionar_tabela(doc, cab, linhas, [4.8, 2.6, 2.6, 2.9, 2.9])
     else:
-        adicionar_nota(doc, "Sem período anterior registrado para comparação.")
+        adicionar_nota(doc, TEXTO_SEM_ANTERIOR)
 
     if visao["projecao"]:
         adicionar_titulo(doc, "Projeção do Próximo Mês", nivel=2)
@@ -1261,11 +1297,12 @@ def montar_documento(dados: dict, imagens: dict, destino):
     # ===================== 6. Série Histórica =====================
     adicionar_titulo(doc, "6. Série Histórica Gerencial")
     if len(visao["serie"]) < 2:
-        adicionar_nota(doc, "A série histórica aparecerá quando houver ≥ 2 meses registrados.")
+        adicionar_nota(doc, TEXTO_SEM_SERIE)
     else:
-        adicionar_paragrafo(
-            doc, f"Série da frente {F_SUST} a partir dos meses registrados no histórico "
-                 "com a mesma regra de cálculo, mais o mês deste relatório.", italic=True)
+        adicionar_paragrafo(doc, f"Série mensal da frente {F_SUST}.", italic=True)
+        cab, linhas = tabela_serie(dados)
+        adicionar_tabela(doc, cab, linhas, [1.9, 1.9, 2.4, 2.3, 2.0, 2.4, 3.6])
+        adicionar_nota(doc, TEXTO_SERIE)
         for chave in ("hist_fluxo", "hist_backlog_frente", "hist_tmr", "hist_taxa"):
             adicionar_imagem(doc, imagens.get(chave), 15)
 
@@ -1285,13 +1322,64 @@ def montar_documento(dados: dict, imagens: dict, destino):
 _LOCK_GRAFICOS = threading.Lock()  # pyplot não é thread-safe (Flask atende em threads)
 
 
+FONTE_PLANILHA = "planilha"
+FONTE_REGISTRADO = "histórico registrado"
+
+
+def _blocos_do_mes(m: pd.DataFrame, ano: int, mes: int) -> dict:
+    """Métricas de um mês já recortado (base do relatório e da série)."""
+    F_SUST = CONFIG["nome_frente_sustentacao"]
+    F_PROJ = CONFIG["nome_frente_projetos"]
+    b = dict(
+        painel_sust=metricas_painel(m, F_SUST),
+        painel_proj=metricas_painel(m, F_PROJ),
+        cat_sust_full=metricas_categoria(m, F_SUST),
+        cat_proj_full=metricas_categoria(m, F_PROJ),
+        outliers_sust=detectar_outliers(m, F_SUST),
+        cap_sust=metricas_capacidade(m, F_SUST),
+        cap_proj=metricas_capacidade(m, F_PROJ),
+    )
+    b["registro"] = _metricas_historicas(
+        f"{ano:04d}-{mes:02d}", periodo_texto(ano, mes),
+        b["painel_sust"], b["painel_proj"], b["cap_sust"], b["cap_proj"],
+        _status_breakdown(m), b["outliers_sust"], b["cat_sust_full"], b["cat_proj_full"])
+    b["registro"]["backlog_inicial_incompleto"] = bool(
+        m.attrs.get("backlog_inicial_incompleto", False))
+    return b
+
+
+def serie_da_planilha(base: pd.DataFrame, ate_periodo: str,
+                      agora: Optional[pd.Timestamp] = None) -> list:
+    """Registro mensal de cada mês da planilha ANTERIOR a ``ate_periodo``.
+
+    Cada mês é recortado da mesma base e calculado com a mesma regra do
+    relatório, então a comparação mês a mês não depende de nada gravado.
+    """
+    serie = []
+    for periodo in metricas.meses_disponiveis(base)["mes"]:
+        if periodo >= ate_periodo:
+            continue
+        ano, mes = (int(p) for p in periodo.split("-"))
+        sub = filtrar_periodo_referencia(base, ano, mes, agora=agora)
+        if sub.empty:
+            continue
+        registro = _blocos_do_mes(sub, ano, mes)["registro"]
+        registro["fonte"] = FONTE_PLANILHA
+        serie.append(registro)
+    return serie
+
+
 def calcular_relatorio(m: pd.DataFrame, ano: int, mes: int,
-                       historico: Optional[tuple] = None) -> dict:
+                       historico: Optional[tuple] = None,
+                       base: Optional[pd.DataFrame] = None) -> dict:
     """Calcula TUDO o que o relatório mostra, sem gravar nada em disco.
 
-    ``m`` é o resultado de ``filtrar_periodo_referencia``. ``historico`` é o
-    par (registros, ignorados) de ``carregar_historico``; se omitido, o
-    histórico é LIDO (nunca gravado) da pasta configurada.
+    ``m`` é o resultado de ``filtrar_periodo_referencia``. ``base`` é a
+    planilha inteira já preparada: os meses anteriores presentes nela entram
+    na série/comparação automaticamente. ``historico`` é o par (registros,
+    ignorados) de ``carregar_historico``; se omitido, é LIDO da pasta
+    configurada. Para um mesmo mês, o registrado no histórico prevalece
+    sobre o calculado da planilha (são os números já apresentados).
     """
     if {"novo_no_mes", "entregue_no_mes"} - set(m.columns):
         raise ValueError("DataFrame sem flags do período. Execute "
@@ -1304,20 +1392,22 @@ def calcular_relatorio(m: pd.DataFrame, ano: int, mes: int,
     periodo = f"{ano:04d}-{mes:02d}"
     txt_periodo = periodo_texto(ano, mes)
 
-    painel_sust = metricas_painel(m, F_SUST)
-    painel_proj = metricas_painel(m, F_PROJ)
-    cat_sust_full = metricas_categoria(m, F_SUST)
-    cat_proj_full = metricas_categoria(m, F_PROJ)
-    outliers_sust = detectar_outliers(m, F_SUST)
-    cap_sust = metricas_capacidade(m, F_SUST)
-    cap_proj = metricas_capacidade(m, F_PROJ)
+    blocos = _blocos_do_mes(m, ano, mes)
+    painel_sust, painel_proj = blocos["painel_sust"], blocos["painel_proj"]
+    cat_sust_full, cat_proj_full = blocos["cat_sust_full"], blocos["cat_proj_full"]
+    outliers_sust = blocos["outliers_sust"]
+    cap_sust, cap_proj = blocos["cap_sust"], blocos["cap_proj"]
+    historico_atual = blocos["registro"]
+    historico_atual["fonte"] = FONTE_PLANILHA
 
-    historico_atual = _metricas_historicas(
-        periodo, txt_periodo, painel_sust, painel_proj,
-        cap_sust, cap_proj, _status_breakdown(m), outliers_sust,
-        cat_sust_full, cat_proj_full)
     registros, ignorados = historico if historico is not None else carregar_historico()
-    anteriores = [r for r in registros if r.get("periodo") != periodo]
+    da_planilha = ({r["periodo"]: r for r in serie_da_planilha(base, periodo,
+                                                               agora=m.attrs.get("corte"))}
+                   if base is not None else {})
+    registrados = {r["periodo"]: {**r, "fonte": FONTE_REGISTRADO}
+                   for r in registros if r.get("periodo", "") < periodo}
+    anteriores = sorted({**da_planilha, **registrados}.values(),
+                        key=lambda r: r["periodo"])
     visao = preparar_visao_historica(anteriores, historico_atual)
 
     corte, fim = m.attrs.get("corte"), m.attrs.get("periodo_fim")
@@ -1331,7 +1421,8 @@ def calcular_relatorio(m: pd.DataFrame, ano: int, mes: int,
         cap_sust=cap_sust, cap_proj=cap_proj,
         tabela_projetos=tabela_frente_secundaria(m, F_PROJ),
         historico_atual=historico_atual, visao_historica=visao,
-        historico_ignorado=[p for p in ignorados if p != periodo],
+        historico_ignorado=[p for p in ignorados
+                            if p < periodo and p not in da_planilha],
         backlog_inicial_incompleto=m.attrs.get("backlog_inicial_incompleto", False),
         mes_parcial=bool(corte is not None and fim is not None and corte < fim),
         corte=corte,
@@ -1382,10 +1473,11 @@ def gerar_docx_bytes(dados: dict, imagens: Optional[dict] = None) -> bytes:
     return buffer.getvalue()
 
 
-def gerar_relatorio_dataframe(m: pd.DataFrame, ano: int, mes: int):
+def gerar_relatorio_dataframe(m: pd.DataFrame, ano: int, mes: int,
+                              base: Optional[pd.DataFrame] = None):
     """Uso em linha de comando: grava o .docx e registra o mês no histórico."""
     logger.info("[1/3] Calculando métricas de %04d-%02d ...", ano, mes)
-    dados = calcular_relatorio(m, ano, mes)
+    dados = calcular_relatorio(m, ano, mes, base=base)
     logger.info("[2/3] Gerando gráficos e documento em memória ...")
     conteudo = gerar_docx_bytes(dados)
     pasta = _nova_pasta_execucao()
@@ -1405,7 +1497,7 @@ def gerar_relatorio(caminho_entrada: str, mes_referencia: Optional[str] = None):
     if m_filtrado.empty:
         raise RuntimeError(
             f"Nenhum chamado relevante para {ano}-{mes:02d} em {caminho_entrada}.")
-    return gerar_relatorio_dataframe(m_filtrado, ano, mes)
+    return gerar_relatorio_dataframe(m_filtrado, ano, mes, base=m)
 
 
 # =============================================================================

@@ -7,7 +7,6 @@ O estado das sessões é persistido em JSON sob ``instance/sessoes`` por
 import base64
 import io
 import os
-import uuid
 from datetime import datetime
 
 import pandas as pd
@@ -338,12 +337,10 @@ def index():
             flash("Formato inválido. Use .csv, .xlsx ou .xlsm.", "error")
             return redirect(url_for("index"))
 
-        nome = secure_filename(arquivo.filename)
-        caminho = os.path.join(app.instance_path, "uploads", f"{uuid.uuid4().hex}_{nome}")
-        os.makedirs(os.path.dirname(caminho), exist_ok=True)
-        arquivo.save(caminho)
+        # Lido direto da memória: o arquivo enviado nunca é gravado em disco.
         try:
-            base = gerador.carregar_dados(caminho)
+            base = gerador.carregar_dados(arquivo.stream.read(),
+                                          nome=secure_filename(arquivo.filename))
             df = _garantir_campos_livres(gerador.preparar_dataframe(base))
             if df.empty:
                 raise ValueError("O arquivo não contém registros com identificador.")
@@ -351,9 +348,6 @@ def index():
         except (KeyError, ValueError, pd.errors.ParserError) as erro:
             flash(f"Arquivo inválido: {erro}", "error")
             return redirect(url_for("index"))
-        finally:
-            if os.path.exists(caminho):
-                os.remove(caminho)
 
         id_sessao = sessoes_store.criar_sessao(
             df.reset_index(drop=True), arquivo.filename, erros, avisos)
@@ -550,10 +544,11 @@ def _registros_incluidos(sessao):
 def _dados_do_mes(sessao, mes_referencia):
     """Recorta o mês e calcula o relatório. Só leitura: nada é gravado em disco."""
     ano, mes = (int(p) for p in mes_referencia.split("-"))
-    sub = gerador.filtrar_periodo_referencia(_registros_incluidos(sessao), ano, mes)
+    base = _registros_incluidos(sessao)
+    sub = gerador.filtrar_periodo_referencia(base, ano, mes)
     if sub.empty:
         return None
-    return gerador.calcular_relatorio(sub, ano, mes)
+    return gerador.calcular_relatorio(sub, ano, mes, base=base)
 
 
 def _tabela(par):
@@ -620,7 +615,11 @@ def preview(id_sessao):
             "outlier_sla": gerador.texto_outlier_sla(dados),
             "premissas": gerador.texto_premissas(),
             "notas_capacidade": gerador.NOTAS_CAPACIDADE,
+            "serie": gerador.TEXTO_SERIE,
+            "sem_serie": gerador.TEXTO_SEM_SERIE,
+            "sem_anterior": gerador.TEXTO_SEM_ANTERIOR,
         },
+        serie=_tabela(gerador.tabela_serie(dados)),
         **contexto,
     )
 

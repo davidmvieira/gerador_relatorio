@@ -157,24 +157,14 @@ def _registros_dataframe(df: pd.DataFrame) -> list:
     return registros
 
 
-def _normalizar_sessao(sessao: dict) -> dict:
-    agora = datetime.now().isoformat(timespec="seconds")
-    payload = dict(sessao)
-    if "registros" not in payload and isinstance(payload.get("df"), pd.DataFrame):
-        payload["registros"] = _registros_dataframe(payload["df"])
-    payload.pop("df", None)
-    payload.setdefault("id_sessao", uuid.uuid4().hex)
-    payload["id_sessao"] = _validar_id(payload["id_sessao"])
-    payload.setdefault("criado_em", agora)
-    payload["atualizado_em"] = agora
-    payload.setdefault("nome_arquivo_origem", "")
-    payload.setdefault("mes_referencia", datetime.now().strftime("%Y-%m"))
-    payload.setdefault("erros", [])
-    payload.setdefault("avisos", [])
-    payload.setdefault("resultado", None)
+def _caminho_base(id_sessao: str) -> str:
+    destino, _ = _caminhos(id_sessao)
+    return destino[:-len(".json")] + ".base.json"
 
+
+def _normalizar_registros(lista: list) -> list:
     registros = []
-    for original in payload.get("registros", []):
+    for original in lista:
         registro = {campo: original.get(campo) for campo in _CAMPOS if campo in original}
         if "data_abertura" not in registro:
             registro["data_abertura"] = _data_iso(original.get("date"))
@@ -193,38 +183,116 @@ def _normalizar_sessao(sessao: dict) -> dict:
             registro["tempo_resolucao_horas"] = _json_escalar(
                 registro["tempo_resolucao_horas"])
         registros.append(registro)
-    payload["registros"] = registros
+    return registros
+
+
+def _gravar_json_atomico(destino: str, objeto, backup: bool) -> None:
+    temporario = destino + ".tmp"
+    backup_tmp = destino + ".bak.tmp"
+    try:
+        with open(temporario, "w", encoding="utf-8", newline="\n") as arquivo:
+            json.dump(objeto, arquivo, ensure_ascii=False, indent=None if not backup else 2,
+                      allow_nan=False, separators=None if backup else (",", ":"))
+            arquivo.flush()
+            os.fsync(arquivo.fileno())
+        if backup and os.path.isfile(destino):
+            shutil.copy2(destino, backup_tmp)
+            os.replace(backup_tmp, destino + ".bak")
+        os.replace(temporario, destino)
+    finally:
+        for caminho in (temporario, backup_tmp):
+            if os.path.exists(caminho):
+                os.remove(caminho)
+
+
+# Cache da base por sessão: (mtime, registros). A base só é gravada na criação.
+_CACHE_BASE: dict = {}
+
+
+def _carregar_base(id_sessao: str) -> Optional[list]:
+    caminho = _caminho_base(id_sessao)
+    if not os.path.isfile(caminho):
+        return None
+    mtime = os.path.getmtime(caminho)
+    em_cache = _CACHE_BASE.get(id_sessao)
+    if em_cache and em_cache[0] == mtime:
+        return em_cache[1]
+    with open(caminho, "r", encoding="utf-8") as arquivo:
+        registros = json.load(arquivo)
+    _CACHE_BASE[id_sessao] = (mtime, registros)
+    return registros
+
+
+def _gravar_base(id_sessao: str, registros: list) -> None:
+    _gravar_json_atomico(_caminho_base(id_sessao), registros, backup=False)
+    _CACHE_BASE.pop(id_sessao, None)
+
+
+def _diferencas(base: list, registros: list) -> dict:
+    """Só o que mudou em relação à base: {posição: {campo: valor}}."""
+    edicoes = {}
+    for posicao, (original, atual) in enumerate(zip(base, registros)):
+        mudou = {campo: atual.get(campo) for campo in _CAMPOS
+                 if campo != "id" and atual.get(campo) != original.get(campo)}
+        if mudou:
+            edicoes[str(posicao)] = mudou
+    return edicoes
+
+
+def _registros_da_sessao(sessao: dict) -> list:
+    """Base gravada na criação + edições. Aceita o formato antigo (registros inline)."""
+    if "registros" in sessao:
+        return sessao["registros"]
+    base = _carregar_base(sessao["id_sessao"]) or []
+    registros = [dict(registro) for registro in base]
+    for posicao, campos in (sessao.get("edicoes") or {}).items():
+        indice = int(posicao)
+        if 0 <= indice < len(registros):
+            registros[indice].update(campos)
+    return registros
+
+
+def _normalizar_sessao(sessao: dict) -> dict:
+    """Prepara o arquivo pequeno da sessão (metadados + edições).
+
+    Se vierem registros (ou um DataFrame), eles viram diferenças em relação à
+    base; a base é gravada só quando ainda não existe (criação ou migração do
+    formato antigo, que guardava a planilha inteira a cada edição).
+    """
+    agora = datetime.now().isoformat(timespec="seconds")
+    payload = dict(sessao)
+    if isinstance(payload.get("df"), pd.DataFrame):
+        payload["registros"] = _registros_dataframe(payload["df"])
+    payload.pop("df", None)
+    payload.setdefault("id_sessao", uuid.uuid4().hex)
+    payload["id_sessao"] = _validar_id(payload["id_sessao"])
+    payload.setdefault("criado_em", agora)
+    payload["atualizado_em"] = agora
+    payload.setdefault("nome_arquivo_origem", "")
+    payload.setdefault("mes_referencia", datetime.now().strftime("%Y-%m"))
+    payload.setdefault("erros", [])
+    payload.setdefault("avisos", [])
+    payload.setdefault("edicoes", {})
+    payload.pop("resultado", None)  # página de resultado não existe mais
+
+    if "registros" in payload:
+        registros = _normalizar_registros(payload.pop("registros"))
+        base = _carregar_base(payload["id_sessao"])
+        if base is None or len(base) != len(registros):
+            _gravar_base(payload["id_sessao"], registros)
+            payload["edicoes"] = {}
+        else:
+            payload["edicoes"] = _diferencas(base, registros)
+
     payload["erros"] = [str(item) for item in payload["erros"]]
     payload["avisos"] = [str(item) for item in payload["avisos"]]
-    resultado = payload.get("resultado")
-    if resultado is not None:
-        payload["resultado"] = {
-            "caminho": str(resultado.get("caminho", "")),
-            "periodo": resultado.get("periodo", {}),
-            "execucao": str(resultado.get("execucao", "")),
-        }
     return payload
 
 
 def _gravar_sem_lock(sessao: dict) -> dict:
     payload = _normalizar_sessao(sessao)
     destino, _ = _caminhos(payload["id_sessao"])
-    temporario = destino + ".tmp"
-    backup = destino + ".bak"
-    backup_tmp = backup + ".tmp"
-    try:
-        with open(temporario, "w", encoding="utf-8", newline="\n") as arquivo:
-            json.dump(payload, arquivo, ensure_ascii=False, indent=2, allow_nan=False)
-            arquivo.flush()
-            os.fsync(arquivo.fileno())
-        if os.path.isfile(destino):
-            shutil.copy2(destino, backup_tmp)
-            os.replace(backup_tmp, backup)
-        os.replace(temporario, destino)
-    finally:
-        for caminho in (temporario, backup_tmp):
-            if os.path.exists(caminho):
-                os.remove(caminho)
+    _gravar_json_atomico(destino, payload, backup=True)
     return payload
 
 
@@ -239,7 +307,6 @@ def criar_sessao(df: pd.DataFrame, nome_arquivo: str, erros: list,
         "mes_referencia": mes,
         "erros": erros,
         "avisos": avisos,
-        "resultado": None,
         "registros": _registros_dataframe(df.reset_index(drop=True)),
     })
     return id_sessao
@@ -257,9 +324,10 @@ def carregar_sessao(id_sessao: str) -> Optional[dict]:
 
 
 def salvar_sessao(sessao: dict) -> None:
-    payload = _normalizar_sessao(sessao)
-    with _lock_sessao(payload["id_sessao"]):
-        _gravar_sem_lock(payload)
+    id_sessao = _validar_id(sessao.get("id_sessao") or uuid.uuid4().hex)
+    sessao = {**sessao, "id_sessao": id_sessao}
+    with _lock_sessao(id_sessao):
+        _gravar_sem_lock(sessao)
 
 
 def atualizar_sessao(id_sessao: str,
@@ -274,7 +342,7 @@ def atualizar_sessao(id_sessao: str,
 
 
 def df_da_sessao(sessao: dict) -> pd.DataFrame:
-    df = pd.DataFrame(sessao.get("registros", []))
+    df = pd.DataFrame(_registros_da_sessao(sessao))
     if "data_abertura" not in df.columns:
         df["data_abertura"] = pd.NaT
     for coluna in ("date", "data_abertura", "data_solucao"):
@@ -332,8 +400,9 @@ def limpar_sessoes_expiradas(dias: int = 7) -> int:
             if atualizado >= limite:
                 continue
             for caminho in (destino, destino + ".bak", destino + ".tmp",
-                            destino + ".bak.tmp"):
+                            destino + ".bak.tmp", _caminho_base(id_sessao)):
                 if os.path.exists(caminho):
                     os.remove(caminho)
+            _CACHE_BASE.pop(id_sessao, None)
             removidas += 1
     return removidas

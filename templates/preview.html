@@ -89,7 +89,7 @@
         <p class="note">{{ descricao_anterior|capitalize }}. Os valores não são classificados como favoráveis ou desfavoráveis.</p>
         {% with t = comparacao %}{% include "_tabela.html" %}{% endwith %}
       {% else %}
-        <p class="note">Sem período anterior registrado para comparação. Use “Registrar mês no histórico” para que este mês sirva de base ao próximo.</p>
+        <p class="note">{{ textos.sem_anterior }}</p>
       {% endif %}
       {% if projecao %}
         <h3>Projeção do Próximo Mês</h3>
@@ -143,9 +143,11 @@
     <section>
       <h2>6. Série Histórica Gerencial</h2>
       {% if dados.visao_historica.serie|length < 2 %}
-        <p class="note">A série histórica aparecerá quando houver ≥ 2 meses registrados.</p>
+        <p class="note">{{ textos.sem_serie }}</p>
       {% else %}
-        <p class="note">Série da frente {{ dados.F_SUST }} a partir dos meses registrados no histórico com a mesma regra de cálculo, mais o mês deste relatório.</p>
+        <p class="note">Série mensal da frente {{ dados.F_SUST }}.</p>
+        {% with t = serie %}{% include "_tabela.html" %}{% endwith %}
+        <p class="note">{{ textos.serie }}</p>
         {% for chave in ['hist_fluxo', 'hist_backlog_frente', 'hist_tmr', 'hist_taxa'] %}
           {% if imagens[chave] %}<figure><img src="data:image/png;base64,{{ imagens[chave] }}" alt="Gráfico da série histórica"></figure>{% endif %}
         {% endfor %}
